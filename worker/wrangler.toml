@@ -1,0 +1,8 @@
+name = "pixel-canvas"
+main = "index.js"
+compatibility_date = "2024-09-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "pixel-canvas"
+database_id = "2b9fc3b8-d70d-4445-a429-c73b48f4a176"
