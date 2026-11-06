@@ -1,7 +1,7 @@
 # 1000×1000 Pixel Canvas
 
 Frontend: static files on GitHub Pages. Backend: a Cloudflare Worker + D1 database (free plan, no card).
-Each IP address may place **20 pixels max** (enforced in the Worker). Pixels are permanent.
+Each IP address may place **100 pixels max** (enforced in the Worker). Pixels are permanent.
 
 ## Setup
 1. Free account at https://dash.cloudflare.com/sign-up

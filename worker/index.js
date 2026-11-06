@@ -1,4 +1,4 @@
-const MAX = 20, SIZE = 1000, COLORS = 16;
+const MAX = 100, SIZE = 1000, COLORS = 16;
 const CORS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
