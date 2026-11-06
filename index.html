@@ -57,7 +57,7 @@ let color = 5;
 COLORS.forEach((c, i) => {
   const b = document.createElement("button");
   b.className = "sw" + (i === color ? " sel" : ""); b.style.background = c;
-  b.onclick = () => { color = i; document.querySelectorAll(".sw").forEach((s, j) => s.classList.toggle("sel", j === i)); };
+  b.onclick = () => { color = i; redraw(); document.querySelectorAll(".sw").forEach((s, j) => s.classList.toggle("sel", j === i)); };
   $("palette").appendChild(b);
 });
 
@@ -114,10 +114,22 @@ function render() {
     for (let y = y0; y <= y1; y++) { const py = Math.round(ty + y * scale) + 0.5; dctx.moveTo(tx + x0 * scale, py); dctx.lineTo(tx + x1 * scale, py); }
     dctx.stroke();
   }
-  if (sel) {   // outline just outside the pixel so its real color stays visible
-    const px = tx + sel.x * scale, py = ty + sel.y * scale, sz = Math.max(scale, 1);
-    dctx.lineWidth = 3; dctx.strokeStyle = "#fff"; dctx.strokeRect(px - 1.5, py - 1.5, sz + 3, sz + 3);
-    dctx.lineWidth = 1; dctx.strokeStyle = "#f0f"; dctx.strokeRect(px - 1.5, py - 1.5, sz + 3, sz + 3);
+  if (sel) {
+    const px = tx + sel.x * scale, py = ty + sel.y * scale;
+    const taken_ = taken.has(sel.x + "_" + sel.y);
+    if (!taken_ && scale >= 2) { dctx.fillStyle = COLORS[color]; dctx.fillRect(px, py, scale, scale); }   // preview of your color, exact pixel size
+    if (scale >= 4) {                                          // thin outline hugging the pixel
+      dctx.lineWidth = 1; dctx.strokeStyle = "#000"; dctx.strokeRect(px - 0.5, py - 0.5, scale + 1, scale + 1);
+      dctx.strokeStyle = "#fff"; dctx.strokeRect(px - 1.5, py - 1.5, scale + 3, scale + 3);
+    } else {                                                   // zoomed out: crosshair ticks that leave the pixel visible
+      const cx = px + scale / 2, cy = py + scale / 2, g = 6, l = 12;
+      for (const [w, c] of [[3, "#fff"], [1, "#000"]]) {
+        dctx.lineWidth = w; dctx.strokeStyle = c; dctx.beginPath();
+        dctx.moveTo(cx - g - l, cy); dctx.lineTo(cx - g, cy); dctx.moveTo(cx + g, cy); dctx.lineTo(cx + g + l, cy);
+        dctx.moveTo(cx, cy - g - l); dctx.lineTo(cx, cy - g); dctx.moveTo(cx, cy + g); dctx.lineTo(cx, cy + g + l);
+        dctx.stroke();
+      }
+    }
   }
 }
 function redraw() { if (!raf) raf = requestAnimationFrame(render); }
@@ -203,6 +215,9 @@ function selectAt(cx, cy) {
   const r = view.getBoundingClientRect();
   const x = Math.floor((cx - r.left - tx) / scale), y = Math.floor((cy - r.top - ty) / scale);
   sel = (x < 0 || y < 0 || x >= SIZE || y >= SIZE) ? null : { x, y };
+  if (sel && scale < 8) {                                      // too small to place accurately: zoom in on it
+    scale = 12; tx = view.clientWidth / 2 - (sel.x + 0.5) * scale; ty = view.clientHeight / 2 - (sel.y + 0.5) * scale; clampPan();
+  }
   redraw(); updateUI();
 }
 
@@ -250,7 +265,7 @@ if (API_URL.includes("YOUR-SUBDOMAIN")) {
       const res = await fetch(`${API_URL}/place`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ x, y, c: color }) });
       const r = await res.json();
       if (r.used !== undefined) used = r.used;
-      if (res.ok) { draw(x, y, color); toast("Pixel placed!"); }
+      if (res.ok) { draw(x, y, color); sel = null; redraw(); toast("Pixel placed!"); }
       else { if (res.status === 409) taken.add(x + "_" + y); toast(r.error || "Couldn't place pixel"); }
     } catch (e) { toast("Network error"); }
     updateUI();
