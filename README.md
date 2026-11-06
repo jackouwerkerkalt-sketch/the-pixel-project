@@ -22,3 +22,6 @@ Each IP address may place **500 pixels max** (enforced in the Worker). Pixels ar
 
 ## Backup
 The canvas lives only in the D1 database. To save a copy: `cd worker && npx wrangler d1 export pixel-canvas --remote --output=backup.sql`
+
+## Eraser
+You can erase only your own pixels (matched by IP on the server). Erasing frees one of your pixel slots. Erased cells keep a marker row (c = -1) so other open pages learn about the removal.

@@ -30,6 +30,8 @@
   #status { margin-left:auto; color:#aaa; }
   #view { flex:1; position:relative; overflow:hidden; cursor:grab; touch-action:none; background:#111; }
   #view.drag { cursor:grabbing; }
+  #view.erasing { cursor:crosshair; }
+  #eraseBtn.on { background:#d33 !important; }
   #disp { position:absolute; left:0; top:0; width:100%; height:100%; display:block; }
   #msg { position:absolute; left:50%; bottom:14px; transform:translateX(-50%); background:#000c; padding:8px 14px; border-radius:8px; display:none; max-width:90%; }
 </style>
@@ -40,6 +42,7 @@
   <div id="palette"></div>
   <button id="colorBtn" title="Custom color"><span id="colorSw"></span><span id="colorHex">#E50000</span></button>
   <button class="act" id="place" disabled>Place pixel</button>
+  <button class="act" id="eraseBtn" style="background:#3a3a42" title="Erase your own pixels (E)">Eraser: off</button>
   <button class="act" id="gridBtn" style="background:#3a3a42">Grid: off</button>
   <button class="sm" id="zin" title="Zoom in">+</button>
   <button class="sm" id="zout" title="Zoom out">−</button>
@@ -124,6 +127,7 @@ for (const el of [hexIn, ...rgbIn.map(o => o.num)]) el.addEventListener("keydown
 function toast(t) { msgEl.textContent = t; msgEl.style.display = "block"; clearTimeout(toast.t); toast.t = setTimeout(() => msgEl.style.display = "none", 3500); }
 
 // ---- view: one viewport-sized canvas, only visible pixels are drawn ----
+let eraseMode = false; const mine = new Set();   // mine: y*SIZE+x of pixels I placed
 let scale = 1, tx = 0, ty = 0, gridOn = false, sel = null, dpr = 1, raf = 0;
 const MINZ = 0.2, MAXZ = 80;
 
@@ -173,6 +177,15 @@ function render() {
     for (let x = x0; x <= x1; x++) { const px = Math.round(tx + x * scale) + 0.5; dctx.moveTo(px, ty + y0 * scale); dctx.lineTo(px, ty + y1 * scale); }
     for (let y = y0; y <= y1; y++) { const py = Math.round(ty + y * scale) + 0.5; dctx.moveTo(tx + x0 * scale, py); dctx.lineTo(tx + x1 * scale, py); }
     dctx.stroke();
+  }
+  if (eraseMode && mine.size) {                                // show which pixels are yours (the only ones you can erase)
+    dctx.lineWidth = 1; dctx.strokeStyle = "#ff2d2d"; const m = Math.max(scale, 5);
+    for (const k of mine) {
+      const x = k % SIZE, y = (k - x) / SIZE;
+      if (x < x0 || x >= x1 || y < y0 || y >= y1) continue;
+      const cx = tx + (x + 0.5) * scale, cy = ty + (y + 0.5) * scale;
+      dctx.strokeRect(Math.round(cx - m / 2) + 0.5, Math.round(cy - m / 2) + 0.5, m, m);
+    }
   }
   if (sel) {
     const px = tx + sel.x * scale, py = ty + sel.y * scale;
@@ -259,6 +272,7 @@ addEventListener("keydown", e => {
   if (e.metaKey || e.ctrlKey || e.altKey) return;
   const step = 80, k = e.key.toLowerCase();
   if (k === "g") setGrid(!gridOn);
+  else if (k === "e") setErase(!eraseMode);
   else if (k === "arrowleft" || k === "a") tx += step;
   else if (k === "arrowright" || k === "d") tx -= step;
   else if (k === "arrowup" || k === "w") ty += step;
@@ -274,6 +288,7 @@ addEventListener("keydown", e => {
 function selectAt(cx, cy) {
   const r = view.getBoundingClientRect();
   const x = Math.floor((cx - r.left - tx) / scale), y = Math.floor((cy - r.top - ty) / scale);
+  if (eraseMode) { if (x >= 0 && y >= 0 && x < SIZE && y < SIZE) erasePixel(x, y); return; }
   sel = (x < 0 || y < 0 || x >= SIZE || y >= SIZE) ? null : { x, y };
   if (sel && scale < 8) {                                      // too small to place accurately: zoom in on it
     scale = 12; tx = view.clientWidth / 2 - (sel.x + 0.5) * scale; ty = view.clientHeight / 2 - (sel.y + 0.5) * scale; clampPan();
@@ -281,22 +296,35 @@ function selectAt(cx, cy) {
   redraw(); updateUI();
 }
 
+function setErase(on) {
+  eraseMode = on; $("eraseBtn").textContent = "Eraser: " + (on ? "on" : "off");
+  $("eraseBtn").classList.toggle("on", on); view.classList.toggle("erasing", on);
+  if (on) { sel = null; toast("Eraser on: click one of your own pixels (outlined in red) to remove it"); }
+  redraw(); updateUI();
+}
+$("eraseBtn").onclick = () => setErase(!eraseMode);
+
 // ---- backend (Cloudflare Worker) ----
 import { API_URL } from "./config.js";
 let used = 0, ready = false, lastId = 0;
+let erasePixel = () => {};
 const taken = new Set();
 
 function updateUI() {
   const left = MAX - used;
   statusEl.textContent = !ready ? "Connecting…" : `${left} of ${MAX} pixels left` + (sel ? ` · (${sel.x}, ${sel.y})` : "");
   const occupied = sel && taken.has(sel.x + "_" + sel.y);
-  placeBtn.disabled = !(ready && left > 0 && sel && !occupied);
+  placeBtn.disabled = eraseMode || !(ready && left > 0 && sel && !occupied);
   placeBtn.textContent = occupied ? "Pixel taken" : "Place pixel";
 }
 
 setColor(color); resize(); fit(); window.addEventListener("resize", () => { resize(); clampPan(); });
 
-function draw(x, y, c) { taken.add(x + "_" + y); colors[y * SIZE + x] = c; redraw(); }
+function draw(x, y, c) {
+  if (c < 0) { taken.delete(x + "_" + y); mine.delete(y * SIZE + x); }      // erased
+  else taken.add(x + "_" + y);
+  colors[y * SIZE + x] = c; redraw();
+}
 
 async function sync() {
   if (document.hidden && ready) return;
@@ -308,7 +336,10 @@ async function sync() {
       more = r.more;
     }
     if (!ready) {
-      used = (await (await fetch(`${API_URL}/me`, { cache: "no-store" })).json()).used; ready = true;
+      used = (await (await fetch(`${API_URL}/me`, { cache: "no-store" })).json()).used;
+      const m = (await (await fetch(`${API_URL}/mine`, { cache: "no-store" })).json()).m;
+      for (let i = 0; i < m.length; i += 2) mine.add(m[i + 1] * SIZE + m[i]);
+      ready = true;
     }
     updateUI();
   } catch (e) { statusEl.textContent = "Connection problem – retrying…"; }
@@ -325,8 +356,18 @@ if (API_URL.includes("YOUR-SUBDOMAIN")) {
       const res = await fetch(`${API_URL}/place`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ x, y, c: color, v: 2 }) });
       const r = await res.json();
       if (r.used !== undefined) used = r.used;
-      if (res.ok) { draw(x, y, color); sel = null; redraw(); toast("Pixel placed!"); }
+      if (res.ok) { draw(x, y, color); mine.add(y * SIZE + x); sel = null; redraw(); toast("Pixel placed!"); }
       else { if (res.status === 409) taken.add(x + "_" + y); toast(r.error || "Couldn't place pixel"); }
+    } catch (e) { toast("Network error"); }
+    updateUI();
+  };
+  erasePixel = async (x, y) => {
+    if (!mine.has(y * SIZE + x)) return toast(taken.has(x + "_" + y) ? "That's someone else's pixel. You can only erase your own." : "Nothing to erase there.");
+    try {
+      const res = await fetch(`${API_URL}/erase`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ x, y }) });
+      const r = await res.json();
+      if (r.used !== undefined) used = r.used;
+      if (res.ok) { draw(x, y, -1); toast("Erased"); } else toast(r.error || "Couldn't erase");
     } catch (e) { toast("Network error"); }
     updateUI();
   };
