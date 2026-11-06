@@ -19,10 +19,7 @@
   #status { margin-left:auto; color:#aaa; }
   #view { flex:1; position:relative; overflow:hidden; cursor:grab; touch-action:none; background:#111; }
   #view.drag { cursor:grabbing; }
-  #stage { position:absolute; left:0; top:0; transform-origin:0 0; will-change:transform; }
-  canvas { display:block; image-rendering:pixelated; background:#fff; }
-  #sel { position:absolute; border:1px solid #f0f; outline:1px solid #fff; pointer-events:none; display:none; }
-  #grid { position:absolute; left:0; top:0; pointer-events:none; }
+  #disp { position:absolute; left:0; top:0; width:100%; height:100%; display:block; }
   #msg { position:absolute; left:50%; bottom:14px; transform:translateX(-50%); background:#000c; padding:8px 14px; border-radius:8px; display:none; max-width:90%; }
 </style>
 </head>
@@ -37,11 +34,7 @@
   <span id="status">Connecting…</span>
 </header>
 <div id="view">
-  <div id="stage">
-    <canvas id="cv" width="1000" height="1000"></canvas>
-    <div id="sel"></div>
-  </div>
-  <canvas id="grid"></canvas>
+  <canvas id="disp"></canvas>
   <div id="msg"></div>
 </div>
 
@@ -52,8 +45,9 @@ const COLORS = ["#ffffff","#e4e4e4","#888888","#222222","#ffa7d1","#e50000","#e5
                 "#e5d900","#94e044","#02be01","#00d3dd","#0083c7","#0000ea","#cf6ee4","#820080"];
 
 const $ = id => document.getElementById(id);
-const view = $("view"), stage = $("stage"), cv = $("cv"), ctx = cv.getContext("2d"),
-      selEl = $("sel"), placeBtn = $("place"), statusEl = $("status"), msgEl = $("msg");
+const view = $("view"), disp = $("disp"), dctx = disp.getContext("2d"),
+      world = Object.assign(document.createElement("canvas"), { width: 1000, height: 1000 }), ctx = world.getContext("2d"),
+      placeBtn = $("place"), statusEl = $("status"), msgEl = $("msg");
 
 // ---- palette ----
 let color = 5;
@@ -66,70 +60,117 @@ COLORS.forEach((c, i) => {
 
 function toast(t) { msgEl.textContent = t; msgEl.style.display = "block"; clearTimeout(toast.t); toast.t = setTimeout(() => msgEl.style.display = "none", 3500); }
 
-// ---- pan / zoom ----
-let scale = 1, tx = 0, ty = 0;
-const gridCv = $("grid"), gctx = gridCv.getContext("2d");
-let gridOn = false;
-function drawGrid() {
+// ---- view: one viewport-sized canvas, only visible pixels are drawn ----
+let scale = 1, tx = 0, ty = 0, gridOn = false, sel = null, dpr = 1, raf = 0;
+const MINZ = 0.2, MAXZ = 80;
+
+function render() {
+  raf = 0;
   const w = view.clientWidth, h = view.clientHeight;
-  if (gridCv.width !== w || gridCv.height !== h) { gridCv.width = w; gridCv.height = h; }
-  gctx.clearRect(0, 0, w, h);
-  if (!gridOn || scale < 6) return;
+  dctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  dctx.fillStyle = "#111"; dctx.fillRect(0, 0, w, h);
+  dctx.imageSmoothingEnabled = false;
+  // visible slice of the world
   const x0 = Math.max(0, Math.floor(-tx / scale)), x1 = Math.min(SIZE, Math.ceil((w - tx) / scale));
   const y0 = Math.max(0, Math.floor(-ty / scale)), y1 = Math.min(SIZE, Math.ceil((h - ty) / scale));
-  gctx.strokeStyle = "rgba(0,0,0,0.3)"; gctx.lineWidth = 1; gctx.beginPath();
-  for (let x = x0; x <= x1; x++) { const px = Math.round(tx + x * scale) + 0.5; gctx.moveTo(px, ty + y0 * scale); gctx.lineTo(px, ty + y1 * scale); }
-  for (let y = y0; y <= y1; y++) { const py = Math.round(ty + y * scale) + 0.5; gctx.moveTo(tx + x0 * scale, py); gctx.lineTo(tx + x1 * scale, py); }
-  gctx.stroke();
+  if (x1 > x0 && y1 > y0)
+    dctx.drawImage(world, x0, y0, x1 - x0, y1 - y0, tx + x0 * scale, ty + y0 * scale, (x1 - x0) * scale, (y1 - y0) * scale);
+  if (gridOn && scale >= 6 && x1 > x0 && y1 > y0) {
+    dctx.strokeStyle = "rgba(0,0,0,0.3)"; dctx.lineWidth = 1; dctx.beginPath();
+    for (let x = x0; x <= x1; x++) { const px = Math.round(tx + x * scale) + 0.5; dctx.moveTo(px, ty + y0 * scale); dctx.lineTo(px, ty + y1 * scale); }
+    for (let y = y0; y <= y1; y++) { const py = Math.round(ty + y * scale) + 0.5; dctx.moveTo(tx + x0 * scale, py); dctx.lineTo(tx + x1 * scale, py); }
+    dctx.stroke();
+  }
+  if (sel) {
+    const px = tx + sel.x * scale, py = ty + sel.y * scale, sz = Math.max(scale, 4);
+    dctx.lineWidth = 3; dctx.strokeStyle = "#fff"; dctx.strokeRect(px - 0.5, py - 0.5, sz + 1, sz + 1);
+    dctx.lineWidth = 1; dctx.strokeStyle = "#f0f"; dctx.strokeRect(px - 0.5, py - 0.5, sz + 1, sz + 1);
+  }
 }
-function apply() { stage.style.transform = `translate(${tx}px,${ty}px) scale(${scale})`; drawGrid(); }
-function setGrid(on) { gridOn = on; $("gridBtn").textContent = "Grid: " + (on ? "on" : "off"); if (on && scale < 6) zoomAt(6 / scale, view.clientWidth / 2, view.clientHeight / 2); else drawGrid(); }
-$("gridBtn").onclick = () => setGrid(!gridOn);
-addEventListener("keydown", e => { if (e.key === "g" || e.key === "G") setGrid(!gridOn); });
+function redraw() { if (!raf) raf = requestAnimationFrame(render); }
+
+function resize() {
+  dpr = window.devicePixelRatio || 1;
+  disp.width = Math.round(view.clientWidth * dpr); disp.height = Math.round(view.clientHeight * dpr);
+  redraw();
+}
 function fit() {
-  scale = Math.max(0.2, Math.min(view.clientWidth, view.clientHeight) / SIZE);
-  tx = (view.clientWidth - SIZE * scale) / 2; ty = (view.clientHeight - SIZE * scale) / 2; apply();
+  scale = Math.max(MINZ, Math.min(view.clientWidth, view.clientHeight) / SIZE);
+  tx = (view.clientWidth - SIZE * scale) / 2; ty = (view.clientHeight - SIZE * scale) / 2; redraw();
+}
+function clampPan() {
+  const w = view.clientWidth, h = view.clientHeight, m = 60;
+  tx = Math.min(w - m, Math.max(m - SIZE * scale, tx));
+  ty = Math.min(h - m, Math.max(m - SIZE * scale, ty));
 }
 function zoomAt(f, cx, cy) {
-  const ns = Math.min(60, Math.max(0.2, scale * f)), r = ns / scale;
-  tx = cx - (cx - tx) * r; ty = cy - (cy - ty) * r; scale = ns; apply();
+  const ns = Math.min(MAXZ, Math.max(MINZ, scale * f)), r = ns / scale;
+  tx = cx - (cx - tx) * r; ty = cy - (cy - ty) * r; scale = ns; clampPan(); redraw();
 }
-view.addEventListener("wheel", e => { e.preventDefault(); const r = view.getBoundingClientRect(); zoomAt(e.deltaY < 0 ? 1.25 : 0.8, e.clientX - r.left, e.clientY - r.top); }, { passive: false });
-$("zin").onclick = () => zoomAt(1.5, view.clientWidth / 2, view.clientHeight / 2);
-$("zout").onclick = () => zoomAt(1 / 1.5, view.clientWidth / 2, view.clientHeight / 2);
+const center = () => [view.clientWidth / 2, view.clientHeight / 2];
+function setGrid(on) {
+  gridOn = on; $("gridBtn").textContent = "Grid: " + (on ? "on" : "off");
+  if (on && scale < 6) zoomAt(6 / scale, ...center()); else redraw();
+}
+$("gridBtn").onclick = () => setGrid(!gridOn);
+$("zin").onclick = () => zoomAt(1.5, ...center());
+$("zout").onclick = () => zoomAt(1 / 1.5, ...center());
 
-const pts = new Map(); let moved = false, lastPinch = 0;
-view.addEventListener("pointerdown", e => { view.setPointerCapture(e.pointerId); pts.set(e.pointerId, e); moved = false; view.classList.add("drag"); });
+view.addEventListener("wheel", e => {
+  e.preventDefault();
+  const r = view.getBoundingClientRect(), unit = e.deltaMode === 1 ? 16 : 1;
+  const k = e.ctrlKey ? 0.01 : 0.0015;                       // trackpad pinch is sent as ctrl+wheel
+  zoomAt(Math.exp(-Math.max(-120, Math.min(120, e.deltaY * unit)) * k * (e.ctrlKey ? 1 : 1.6)), e.clientX - r.left, e.clientY - r.top);
+}, { passive: false });
+
+// pointers: drag to pan, pinch to zoom, click to select, double-click to zoom in
+const pts = new Map(); let moved = false, start = null, lastPinch = 0;
+view.addEventListener("pointerdown", e => {
+  view.setPointerCapture(e.pointerId); pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pts.size === 1) { start = { x: e.clientX, y: e.clientY }; moved = false; }
+  view.classList.add("drag");
+});
 view.addEventListener("pointermove", e => {
-  if (!pts.has(e.pointerId)) return;
-  const prev = pts.get(e.pointerId); pts.set(e.pointerId, e);
-  if (pts.size === 2) {
-    const [a, b] = [...pts.values()], d = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
-    if (lastPinch) { const r = view.getBoundingClientRect(); zoomAt(d / lastPinch, (a.clientX + b.clientX) / 2 - r.left, (a.clientY + b.clientY) / 2 - r.top); }
+  const p = pts.get(e.pointerId); if (!p) return;
+  const dx = e.clientX - p.x, dy = e.clientY - p.y; p.x = e.clientX; p.y = e.clientY;
+  if (pts.size >= 2) {
+    const [a, b] = [...pts.values()], d = Math.hypot(a.x - b.x, a.y - b.y), r = view.getBoundingClientRect();
+    if (lastPinch) zoomAt(d / lastPinch, (a.x + b.x) / 2 - r.left, (a.y + b.y) / 2 - r.top);
     lastPinch = d; moved = true; return;
   }
-  const dx = e.clientX - prev.clientX, dy = e.clientY - prev.clientY;
-  if (Math.abs(dx) + Math.abs(dy) > 0) { if (Math.hypot(e.clientX - downX, e.clientY - downY) > 4) moved = true; }
-  if (moved) { tx += dx; ty += dy; apply(); }
+  if (!moved && Math.hypot(e.clientX - start.x, e.clientY - start.y) > 4) moved = true;
+  if (moved) { tx += dx; ty += dy; clampPan(); redraw(); }
 });
-let downX = 0, downY = 0;
-view.addEventListener("pointerdown", e => { downX = e.clientX; downY = e.clientY; }, true);
 function up(e) {
   if (!pts.has(e.pointerId)) return;
-  pts.delete(e.pointerId); lastPinch = 0; view.classList.remove("drag");
-  if (!moved && e.type === "pointerup" && pts.size === 0) selectAt(e.clientX, e.clientY);
+  pts.delete(e.pointerId); lastPinch = 0;
+  if (pts.size === 1) moved = true;                         // finger left after a pinch: don't treat as a click
+  if (pts.size === 0) { view.classList.remove("drag"); if (!moved && e.type === "pointerup") selectAt(e.clientX, e.clientY); }
 }
 view.addEventListener("pointerup", up); view.addEventListener("pointercancel", up);
+view.addEventListener("dblclick", e => { const r = view.getBoundingClientRect(); zoomAt(2, e.clientX - r.left, e.clientY - r.top); });
 
-// ---- selection ----
-let sel = null;
+addEventListener("keydown", e => {
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const step = 80, k = e.key.toLowerCase();
+  if (k === "g") setGrid(!gridOn);
+  else if (k === "arrowleft" || k === "a") tx += step;
+  else if (k === "arrowright" || k === "d") tx -= step;
+  else if (k === "arrowup" || k === "w") ty += step;
+  else if (k === "arrowdown" || k === "s") ty -= step;
+  else if (k === "+" || k === "=") return zoomAt(1.5, ...center());
+  else if (k === "-") return zoomAt(1 / 1.5, ...center());
+  else if (k === "0") return fit();
+  else if (k === "enter" && !placeBtn.disabled) return placeBtn.click();
+  else return;
+  clampPan(); redraw();
+});
+
 function selectAt(cx, cy) {
   const r = view.getBoundingClientRect();
   const x = Math.floor((cx - r.left - tx) / scale), y = Math.floor((cy - r.top - ty) / scale);
-  if (x < 0 || y < 0 || x >= SIZE || y >= SIZE) { sel = null; selEl.style.display = "none"; updateUI(); return; }
-  sel = { x, y };
-  Object.assign(selEl.style, { display: "block", left: x + "px", top: y + "px", width: "1px", height: "1px", borderWidth: (1 / scale) + "px", outlineWidth: (1 / scale) + "px" });
-  updateUI();
+  sel = (x < 0 || y < 0 || x >= SIZE || y >= SIZE) ? null : { x, y };
+  redraw(); updateUI();
 }
 
 // ---- backend (Cloudflare Worker) ----
@@ -146,11 +187,12 @@ function updateUI() {
 }
 
 ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, SIZE, SIZE);
-fit(); window.addEventListener("resize", fit);
+resize(); fit(); window.addEventListener("resize", () => { resize(); clampPan(); });
 
-function draw(x, y, c) { taken.add(x + "_" + y); ctx.fillStyle = COLORS[c] || "#000"; ctx.fillRect(x, y, 1, 1); }
+function draw(x, y, c) { taken.add(x + "_" + y); ctx.fillStyle = COLORS[c] || "#000"; ctx.fillRect(x, y, 1, 1); redraw(); }
 
 async function sync() {
+  if (document.hidden && ready) return;
   try {
     let more = true;
     while (more) {
