@@ -30,6 +30,15 @@
   #picker input[type=number], #picker #hex { width:64px; background:#1b1b1f; color:#eee; border:1px solid #444; border-radius:5px; padding:4px 6px; font:13px ui-monospace,monospace; }
   #picker #hex { flex:1; width:auto; text-transform:uppercase; }
   #picker #hex.bad { border-color:#e55; }
+  #adminPanel { display:none; position:fixed; z-index:10; top:50px; left:12px; width:270px; padding:12px; background:#26262c; border:1px solid #7c3aed; border-radius:10px; box-shadow:0 8px 24px #000a; flex-direction:column; gap:8px; }
+  #adminPanel.open { display:flex; }
+  #adminPanel button { background:#3a3a42; color:#eee; border:0; border-radius:6px; padding:7px 10px; cursor:pointer; font-size:13px; text-align:left; }
+  #adminPanel button.on { background:#d33; }
+  #adminPanel button.go { background:#7c3aed; }
+  #adminPanel .hint { color:#999; font-size:12px; }
+  #adminPanel .row { display:flex; align-items:center; gap:8px; }
+  #adminPanel input[type=number] { width:80px; background:#1b1b1f; color:#eee; border:1px solid #444; border-radius:5px; padding:4px 6px; font:13px ui-monospace,monospace; }
+  #adminPanel .chk { font-size:13px; display:flex; gap:6px; align-items:center; }
   #status { margin-left:auto; color:#aaa; }
   #view { flex:1; position:relative; overflow:hidden; cursor:grab; touch-action:none; background:#111; }
   #view.drag { cursor:grabbing; }
@@ -46,6 +55,7 @@
   <button id="colorBtn" title="Custom color"><span id="colorSw"></span><span id="colorHex">#E50000</span></button>
   <button class="act" id="eraseBtn" style="background:#3a3a42" title="Erase your own pixels (E)">Eraser: off</button>
   <button class="act" id="gridBtn" style="background:#3a3a42">Grid: off</button>
+  <button class="act" id="adminBtn" style="display:none;background:#7c3aed">Admin</button>
   <button class="sm" id="zin" title="Zoom in">+</button>
   <button class="sm" id="zout" title="Zoom out">−</button>
   <span id="status">Connecting…</span>
@@ -57,6 +67,19 @@
   <div class="row"><label style="color:#f66">R</label><input type="range" id="rr" min="0" max="255"><input type="number" id="rn" min="0" max="255"></div>
   <div class="row"><label style="color:#6d6">G</label><input type="range" id="gr" min="0" max="255"><input type="number" id="gn" min="0" max="255"></div>
   <div class="row"><label style="color:#69f">B</label><input type="range" id="br" min="0" max="255"><input type="number" id="bn" min="0" max="255"></div>
+</div>
+<div id="adminPanel">
+  <b>Admin</b><span class="hint">Unlimited pixels. Eraser and area erase work on anyone's pixels.</span>
+  <button id="areaBtn">Erase area: off</button>
+  <button id="impPick">Import image…</button>
+  <input type="file" id="impFile" accept="image/*" style="display:none">
+  <div id="impOpts" style="display:none">
+    <div class="row"><label>Width</label><input type="number" id="impW" min="1" max="1000"><span class="hint">px</span></div>
+    <label class="chk"><input type="checkbox" id="impOver"> Overwrite existing pixels</label>
+    <div class="hint" id="impInfo"></div>
+    <button id="impGo" class="go">Choose where to place it</button>
+  </div>
+  <button id="admOut">Lock admin</button>
 </div>
 <div id="view">
   <canvas id="disp"></canvas>
@@ -140,6 +163,7 @@ for (const el of [hexIn, ...rgbIn.map(o => o.num)]) el.addEventListener("keydown
 function toast(t) { msgEl.textContent = t; msgEl.style.display = "block"; clearTimeout(toast.t); toast.t = setTimeout(() => msgEl.style.display = "none", 3500); }
 
 // ---- view: one viewport-sized canvas, only visible pixels are drawn ----
+let adminOn = false, adminToken = "", areaMode = false, area = null, impMode = false, imp = null, impCv = null, impPos = null;
 let eraseMode = false; const mine = new Set();   // mine: y*SIZE+x of pixels I placed
 let scale = 1, tx = 0, ty = 0, gridOn = false, sel = null, dpr = 1, raf = 0;
 const MINZ = 0.2, MAXZ = 80;
@@ -200,6 +224,18 @@ function render() {
       dctx.strokeRect(Math.round(cx - m / 2) + 0.5, Math.round(cy - m / 2) + 0.5, m, m);
     }
   }
+  if (area) {                                                  // admin: area-erase rectangle
+    const ax0 = Math.min(area.a.x, area.b.x), ax1 = Math.max(area.a.x, area.b.x), ay0 = Math.min(area.a.y, area.b.y), ay1 = Math.max(area.a.y, area.b.y);
+    const rx = tx + ax0 * scale, ry = ty + ay0 * scale, rw = (ax1 - ax0 + 1) * scale, rh = (ay1 - ay0 + 1) * scale;
+    dctx.fillStyle = "rgba(255,0,0,0.22)"; dctx.fillRect(rx, ry, rw, rh);
+    dctx.lineWidth = 2; dctx.strokeStyle = "#f33"; dctx.setLineDash([6, 4]); dctx.strokeRect(rx, ry, rw, rh); dctx.setLineDash([]);
+  }
+  if (impMode && imp && impPos) {                              // admin: ghost of the image being placed
+    const gx = tx + impPos.x * scale, gy = ty + impPos.y * scale;
+    dctx.imageSmoothingEnabled = false; dctx.globalAlpha = 0.8;
+    dctx.drawImage(impCv, gx, gy, imp.w * scale, imp.h * scale); dctx.globalAlpha = 1;
+    dctx.lineWidth = 2; dctx.strokeStyle = "#7c3aed"; dctx.strokeRect(gx, gy, imp.w * scale, imp.h * scale);
+  }
   if (sel) {
     const px = tx + sel.x * scale, py = ty + sel.y * scale;
     const taken_ = taken.has(sel.x + "_" + sel.y);
@@ -256,7 +292,9 @@ view.addEventListener("wheel", e => {
 
 // pointers: drag to pan, pinch to zoom, click to select, double-click to zoom in
 const pts = new Map(); let moved = false, start = null, lastPinch = 0;
+const pixAt = e => { const r = view.getBoundingClientRect(); return { x: Math.max(0, Math.min(SIZE - 1, Math.floor((e.clientX - r.left - tx) / scale))), y: Math.max(0, Math.min(SIZE - 1, Math.floor((e.clientY - r.top - ty) / scale))) }; };
 view.addEventListener("pointerdown", e => {
+  if (areaMode && pts.size === 0 && e.button === 0) area = { a: pixAt(e), b: pixAt(e) };
   view.setPointerCapture(e.pointerId); pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
   if (pts.size === 1) { start = { x: e.clientX, y: e.clientY }; moved = false; }
   view.classList.add("drag");
@@ -264,6 +302,7 @@ view.addEventListener("pointerdown", e => {
 view.addEventListener("pointermove", e => {
   const p = pts.get(e.pointerId); if (!p) return;
   const dx = e.clientX - p.x, dy = e.clientY - p.y; p.x = e.clientX; p.y = e.clientY;
+  if (area) { area.b = pixAt(e); redraw(); return; }
   if (pts.size >= 2) {
     const [a, b] = [...pts.values()], d = Math.hypot(a.x - b.x, a.y - b.y), r = view.getBoundingClientRect();
     if (lastPinch) zoomAt(d / lastPinch, (a.x + b.x) / 2 - r.left, (a.y + b.y) / 2 - r.top);
@@ -276,7 +315,11 @@ function up(e) {
   if (!pts.has(e.pointerId)) return;
   pts.delete(e.pointerId); lastPinch = 0;
   if (pts.size === 1) moved = true;                         // finger left after a pinch: don't treat as a click
-  if (pts.size === 0) { view.classList.remove("drag"); if (!moved && e.type === "pointerup") selectAt(e.clientX, e.clientY); }
+  if (pts.size === 0) {
+    view.classList.remove("drag");
+    if (area) { if (e.type === "pointerup") finishArea(); else { area = null; redraw(); } }
+    else if (!moved && e.type === "pointerup") selectAt(e.clientX, e.clientY);
+  }
 }
 view.addEventListener("pointerup", up); view.addEventListener("pointercancel", up);
 view.addEventListener("dblclick", e => { const r = view.getBoundingClientRect(); zoomAt(2, e.clientX - r.left, e.clientY - r.top); });
@@ -284,6 +327,8 @@ view.addEventListener("dblclick", e => { const r = view.getBoundingClientRect();
 addEventListener("keydown", e => {
   if (e.metaKey || e.ctrlKey || e.altKey) return;
   const step = 80, k = e.key.toLowerCase();
+  if (e.shiftKey && k === "a") { adminOn ? toggleAdminPanel() : unlockAdmin(); return; }
+  if (k === "escape") { if (impMode) cancelImport(); if (areaMode) setArea(false); picker.classList.remove("open"); return; }
   if (k === "g") setGrid(!gridOn);
   else if (k === "e") setErase(!eraseMode);
   else if (k === "arrowleft" || k === "a") tx += step;
@@ -298,6 +343,7 @@ addEventListener("keydown", e => {
 });
 
 view.addEventListener("pointermove", e => {                  // hover preview of the pixel you're about to place
+  if (impMode && e.pointerType === "mouse" && !pts.size) { impPos = impOrigin(pixAt(e)); redraw(); return; }
   if (pts.size || e.pointerType !== "mouse") return;
   let n = null;
   if (!eraseMode && scale >= 8) {
@@ -311,6 +357,7 @@ view.addEventListener("pointerleave", () => { if (sel) { sel = null; redraw(); u
 function selectAt(cx, cy) {
   const r = view.getBoundingClientRect();
   const x = Math.floor((cx - r.left - tx) / scale), y = Math.floor((cy - r.top - ty) / scale);
+  if (impMode) { impPos = impOrigin(pixAt({ clientX: cx, clientY: cy })); redraw(); confirmImport(); return; }
   if (eraseMode) { if (x >= 0 && y >= 0 && x < SIZE && y < SIZE) erasePixel(x, y); return; }
   sel = (x < 0 || y < 0 || x >= SIZE || y >= SIZE) ? null : { x, y };
   if (sel && scale < 8) {                                      // too small to place accurately: zoom in on it
@@ -322,10 +369,113 @@ function selectAt(cx, cy) {
 function setErase(on) {
   eraseMode = on; $("eraseBtn").textContent = "Eraser: " + (on ? "on" : "off");
   $("eraseBtn").classList.toggle("on", on); view.classList.toggle("erasing", on);
-  if (on) { sel = null; toast("Eraser on: click one of your own pixels (outlined in red) to remove it"); }
+  if (on) { sel = null; if (areaMode) setArea(false); cancelImport(); toast(adminOn ? "Eraser on: click any pixel to delete it" : "Eraser on: click one of your own pixels (outlined in red) to remove it"); }
   redraw(); updateUI();
 }
 $("eraseBtn").onclick = () => setErase(!eraseMode);
+
+// ---- admin (secret token lives in the Worker; this page only stores what you type) ----
+const adm = async (path, body) => {
+  const res = await fetch(`${API_URL}${path}`, { method: "POST", headers: { "Content-Type": "application/json", "X-Admin-Token": adminToken }, body: JSON.stringify(body) });
+  return { ok: res.ok, status: res.status, ...(await res.json().catch(() => ({}))) };
+};
+const checkToken = async t => { try { return (await fetch(`${API_URL}/admin/check`, { method: "POST", headers: { "Content-Type": "application/json", "X-Admin-Token": t }, body: "{}" })).ok; } catch (e) { return false; } };
+const adminPanel = $("adminPanel");
+function toggleAdminPanel() { picker.classList.remove("open"); adminPanel.classList.toggle("open"); }
+function setAdmin(on, t) {
+  adminOn = on; adminToken = on ? t : "";
+  if (on) localStorage.setItem("pc_admin_token", t); else localStorage.removeItem("pc_admin_token");
+  $("adminBtn").style.display = on ? "" : "none";
+  if (!on) { adminPanel.classList.remove("open"); setArea(false); cancelImport(); }
+  updateUI();
+}
+async function unlockAdmin() {
+  const t = (prompt("Admin token:") || "").trim(); if (!t) return;
+  if (await checkToken(t)) { setAdmin(true, t); toast("Admin mode on. Click the Admin button for tools."); } else toast("Wrong token");
+}
+$("adminBtn").onclick = toggleAdminPanel;
+$("admOut").onclick = () => { setAdmin(false); toast("Admin locked"); };
+document.querySelector("header h1").addEventListener("dblclick", () => { if (!adminOn) unlockAdmin(); });
+for (const el of adminPanel.querySelectorAll("input")) el.addEventListener("keydown", e => e.stopPropagation());
+document.addEventListener("pointerdown", e => { if (!adminPanel.contains(e.target) && !$("adminBtn").contains(e.target)) adminPanel.classList.remove("open"); });
+(async () => { const t = localStorage.getItem("pc_admin_token"); if (t) { if (await checkToken(t)) setAdmin(true, t); else localStorage.removeItem("pc_admin_token"); } })();
+
+// area erase: drag a box, confirm, everything inside is removed (whoever placed it)
+function setArea(on) {
+  areaMode = on; area = null; $("areaBtn").textContent = "Erase area: " + (on ? "on (drag a box)" : "off"); $("areaBtn").classList.toggle("on", on);
+  view.classList.toggle("erasing", on || eraseMode);
+  if (on) { if (eraseMode) setErase(false); cancelImport(); adminPanel.classList.remove("open"); toast("Drag a box over the pixels to delete. Esc cancels."); }
+  redraw();
+}
+$("areaBtn").onclick = () => setArea(!areaMode);
+async function finishArea() {
+  const a = area; area = null; if (!a) return;
+  const x0 = Math.min(a.a.x, a.b.x), x1 = Math.max(a.a.x, a.b.x), y0 = Math.min(a.a.y, a.b.y), y1 = Math.max(a.a.y, a.b.y);
+  let n = 0; for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) if (colors[y * SIZE + x] >= 0) n++;
+  redraw();
+  if (!n) return toast("No pixels in that area.");
+  if (!confirm(`Delete ${n} pixel${n === 1 ? "" : "s"} in this area (${x1 - x0 + 1}×${y1 - y0 + 1})? Anyone's pixels will be removed.`)) return;
+  const r = await adm("/admin/erase", { x0, y0, x1, y1 });
+  if (!r.ok) return toast(r.error || "Couldn't erase");
+  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) if (colors[y * SIZE + x] >= 0) draw(x, y, -1);
+  toast(`Erased ${r.erased} pixels`);
+}
+
+// image import
+$("impPick").onclick = () => $("impFile").click();
+let impBitmap = null;
+$("impFile").onchange = async () => {
+  const f = $("impFile").files[0]; if (!f) return;
+  try { impBitmap = await createImageBitmap(f); } catch (e) { return toast("Couldn't read that image"); }
+  $("impW").value = Math.min(impBitmap.width, 100); $("impOpts").style.display = "flex"; $("impOpts").style.flexDirection = "column"; $("impOpts").style.gap = "8px";
+  buildImport(); $("impFile").value = "";
+};
+$("impW").oninput = buildImport;
+const IMP_MAX = 25000;
+function buildImport() {
+  if (!impBitmap) return;
+  const w = Math.max(1, Math.min(SIZE, Math.round(+$("impW").value) || 1));
+  const h = Math.max(1, Math.min(SIZE, Math.round(impBitmap.height * w / impBitmap.width)));
+  const c = document.createElement("canvas"); c.width = w; c.height = h;
+  const g = c.getContext("2d", { willReadFrequently: true });
+  g.imageSmoothingEnabled = w < impBitmap.width; g.imageSmoothingQuality = "high";
+  g.drawImage(impBitmap, 0, 0, w, h);
+  const id = g.getImageData(0, 0, w, h); let n = 0;
+  for (let i = 0; i < id.data.length; i += 4) { if (id.data[i + 3] >= 128) { id.data[i + 3] = 255; n++; } else id.data[i + 3] = 0; }   // transparent stays transparent
+  g.putImageData(id, 0, 0);
+  imp = { w, h, data: id.data, n }; impCv = c;
+  $("impInfo").textContent = `${w}×${h} px · ${n.toLocaleString()} pixels` + (n > IMP_MAX ? ` — too many (max ${IMP_MAX.toLocaleString()} per import; the free database allows ~100k writes/day, ~3 per pixel)` : "");
+  $("impGo").disabled = n > IMP_MAX || n === 0;
+}
+$("impGo").onclick = () => {
+  if (!imp) return;
+  if (eraseMode) setErase(false); if (areaMode) setArea(false);
+  impMode = true; impPos = impOrigin({ x: Math.floor(SIZE / 2), y: Math.floor(SIZE / 2) }); adminPanel.classList.remove("open");
+  toast("Move over the canvas and click to place the image (Esc cancels)"); redraw();
+};
+const impOrigin = p => ({ x: Math.max(0, Math.min(SIZE - imp.w, p.x - (imp.w >> 1))), y: Math.max(0, Math.min(SIZE - imp.h, p.y - (imp.h >> 1))) });
+function cancelImport() { impMode = false; impPos = null; redraw(); }
+let importing = false;
+async function confirmImport() {
+  if (!impMode || !imp || importing) return;
+  const { x: ox, y: oy } = impPos, over = $("impOver").checked, list = [];
+  for (let j = 0; j < imp.h; j++) for (let i = 0; i < imp.w; i++) {
+    const k = (j * imp.w + i) * 4; if (imp.data[k + 3] < 128) continue;
+    list.push([ox + i, oy + j, (imp.data[k] << 16) | (imp.data[k + 1] << 8) | imp.data[k + 2]]);
+  }
+  if (!confirm(`Place this image (${imp.w}×${imp.h}, ${list.length.toLocaleString()} pixels) at (${ox}, ${oy})?${over ? " It will overwrite existing pixels." : " Existing pixels are kept."}`)) return;
+  importing = true;
+  try {
+    for (let i = 0; i < list.length; i += 2000) {
+      toast(`Uploading… ${Math.min(i + 2000, list.length).toLocaleString()} / ${list.length.toLocaleString()}`);
+      const r = await adm("/admin/import", { pixels: list.slice(i, i + 2000), overwrite: over });
+      if (!r.ok) { toast(r.error || "Import failed"); importing = false; return; }
+    }
+    for (const [x, y, c] of list) if (over || colors[y * SIZE + x] < 0) draw(x, y, c);
+    toast("Image placed!"); cancelImport();
+  } catch (e) { toast("Network error during import"); }
+  importing = false;
+}
 
 // ---- backend (Cloudflare Worker) ----
 import { API_URL } from "./config.js";
@@ -336,7 +486,7 @@ const taken = new Set();
 
 function updateUI() {
   const left = MAX - used;
-  statusEl.textContent = !ready ? "Connecting…" : `${left} of ${MAX} pixels left` + (sel ? ` · (${sel.x}, ${sel.y})` : "");
+  statusEl.textContent = !ready ? "Connecting…" : (adminOn ? "Admin · unlimited pixels" : `${left} of ${MAX} pixels left`) + (sel ? ` · (${sel.x}, ${sel.y})` : "");
 }
 
 setColor(color); resize(); fit(); window.addEventListener("resize", () => { resize(); clampPan(); });
@@ -373,6 +523,12 @@ if (API_URL.includes("YOUR-SUBDOMAIN")) {
   placePixel = async (x, y) => {
     const key = x + "_" + y;
     if (!ready || pending.has(key)) return;
+    if (adminOn) {                                              // admin: no limit, can overwrite
+      pending.add(key);
+      try { const r = await adm("/admin/place", { x, y, c: color }); if (r.ok) draw(x, y, color); else toast(r.error || "Couldn't place pixel"); }
+      catch (e) { toast("Network error"); }
+      pending.delete(key); return;
+    }
     if (used >= MAX) return toast(`You've used all ${MAX} pixels. Erase one to place another.`);
     if (taken.has(key)) return toast("That pixel is already taken.");
     pending.add(key);
@@ -386,6 +542,12 @@ if (API_URL.includes("YOUR-SUBDOMAIN")) {
     pending.delete(key); updateUI();
   };
   erasePixel = async (x, y) => {
+    if (adminOn) {                                              // admin: erase anyone's pixel
+      if (!taken.has(x + "_" + y)) return toast("Nothing to erase there.");
+      try { const r = await adm("/admin/erase", { x0: x, y0: y, x1: x, y1: y }); if (r.ok) { draw(x, y, -1); toast("Erased (admin)"); } else toast(r.error || "Couldn't erase"); }
+      catch (e) { toast("Network error"); }
+      return;
+    }
     if (!mine.has(y * SIZE + x)) return toast(taken.has(x + "_" + y) ? "That's someone else's pixel. You can only erase your own." : "Nothing to erase there.");
     try {
       const res = await fetch(`${API_URL}/erase`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ x, y }) });

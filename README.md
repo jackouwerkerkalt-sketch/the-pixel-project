@@ -25,3 +25,7 @@ The canvas lives only in the D1 database. To save a copy: `cd worker && npx wran
 
 ## Eraser
 You can erase only your own pixels (matched by IP on the server). Erasing frees one of your pixel slots. Erased cells keep a marker row (c = -1) so other open pages learn about the removal.
+
+## Admin (owner only)
+Admin powers need a secret token, stored as the Worker secret `ADMIN_TOKEN` (never in this repo; set with `npx wrangler secret put ADMIN_TOKEN`).
+In the page press **Shift+A** (or double-click the title) and enter the token. You get unlimited pixels, can erase anyone's pixel (Eraser) or a whole area, and can import an image (max 25,000 pixels per import; every pixel costs ~3 of Cloudflare's 100k free daily database writes).
