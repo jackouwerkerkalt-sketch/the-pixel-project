@@ -44,9 +44,12 @@ const MAX = 20, SIZE = 1000;
 const COLORS = ["#ffffff","#e4e4e4","#888888","#222222","#ffa7d1","#e50000","#e59500","#a06a42",
                 "#e5d900","#94e044","#02be01","#00d3dd","#0083c7","#0000ea","#cf6ee4","#820080"];
 
+const PACK = COLORS.map(h => 0xff000000 | (parseInt(h.slice(5, 7), 16) << 16) | (parseInt(h.slice(3, 5), 16) << 8) | parseInt(h.slice(1, 3), 16));
+const WHITE = PACK[0], BG = 0xff111111 >>> 0;
+const colors = new Uint8Array(SIZE * SIZE).fill(255);   // 255 = untouched (white)
+let img = null, buf = null;
 const $ = id => document.getElementById(id);
 const view = $("view"), disp = $("disp"), dctx = disp.getContext("2d"),
-      world = Object.assign(document.createElement("canvas"), { width: 1000, height: 1000 }), ctx = world.getContext("2d"),
       placeBtn = $("place"), statusEl = $("status"), msgEl = $("msg");
 
 // ---- palette ----
@@ -66,25 +69,55 @@ const MINZ = 0.2, MAXZ = 80;
 
 function render() {
   raf = 0;
-  const w = view.clientWidth, h = view.clientHeight;
+  const w = view.clientWidth, h = view.clientHeight, W = disp.width, H = disp.height;
+  if (!img || img.width !== W || img.height !== H) { img = dctx.createImageData(W, H); buf = new Uint32Array(img.data.buffer); }
+  buf.fill(BG);
+  const s = scale * dpr, ox = tx * dpr, oy = ty * dpr;
+  const x0 = Math.max(0, Math.floor(-ox / s)), x1 = Math.min(SIZE, Math.ceil((W - ox) / s));
+  const y0 = Math.max(0, Math.floor(-oy / s)), y1 = Math.min(SIZE, Math.ceil((H - oy) / s));
+  if (x1 > x0 && y1 > y0) {
+    const clampX = v => Math.max(0, Math.min(W, v)), clampY = v => Math.max(0, Math.min(H, v));
+    const bx = new Int32Array(x1 - x0 + 1);                    // device-pixel column edges: same rounding as the grid
+    for (let x = x0; x <= x1; x++) bx[x - x0] = Math.round(ox + x * s);
+    if (s >= 1) {
+      for (let y = y0; y < y1; y++) {
+        const yl = clampY(Math.round(oy + y * s)), yr = clampY(Math.round(oy + (y + 1) * s));
+        if (yr <= yl) continue;
+        const row = yl * W, base = y * SIZE;
+        for (let x = x0; x < x1; x++) {
+          const xl = clampX(bx[x - x0]), xr = clampX(bx[x - x0 + 1]); if (xr <= xl) continue;
+          const c = colors[base + x]; buf.fill(c === 255 ? WHITE : PACK[c], row + xl, row + xr);
+        }
+        for (let r = yl + 1; r < yr; r++) buf.copyWithin(r * W, row, row + W);
+      }
+    } else {                                                   // zoomed out: every pixel keeps its exact color, at least 1 device px
+      const L = clampX(Math.round(ox + x0 * s)), R = clampX(Math.round(ox + x1 * s));
+      const T = clampY(Math.round(oy + y0 * s)), B = clampY(Math.round(oy + y1 * s));
+      for (let r = T; r < B; r++) buf.fill(WHITE, r * W + L, r * W + R);
+      for (let y = y0; y < y1; y++) {
+        const yl = Math.round(oy + y * s), yr = Math.max(yl + 1, Math.round(oy + (y + 1) * s)), base = y * SIZE;
+        if (yr <= 0 || yl >= H) continue;
+        for (let x = x0; x < x1; x++) {
+          const c = colors[base + x]; if (c === 255) continue;
+          const xl = bx[x - x0], xr = Math.max(xl + 1, bx[x - x0 + 1]);
+          const cl = clampX(xl), cr = clampX(xr); if (cr <= cl) continue;
+          for (let r = clampY(yl); r < clampY(yr); r++) buf.fill(PACK[c], r * W + cl, r * W + cr);
+        }
+      }
+    }
+  }
+  dctx.putImageData(img, 0, 0);
   dctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  dctx.fillStyle = "#111"; dctx.fillRect(0, 0, w, h);
-  dctx.imageSmoothingEnabled = false;
-  // visible slice of the world
-  const x0 = Math.max(0, Math.floor(-tx / scale)), x1 = Math.min(SIZE, Math.ceil((w - tx) / scale));
-  const y0 = Math.max(0, Math.floor(-ty / scale)), y1 = Math.min(SIZE, Math.ceil((h - ty) / scale));
-  if (x1 > x0 && y1 > y0)
-    dctx.drawImage(world, x0, y0, x1 - x0, y1 - y0, tx + x0 * scale, ty + y0 * scale, (x1 - x0) * scale, (y1 - y0) * scale);
   if (gridOn && scale >= 6 && x1 > x0 && y1 > y0) {
     dctx.strokeStyle = "rgba(0,0,0,0.3)"; dctx.lineWidth = 1; dctx.beginPath();
     for (let x = x0; x <= x1; x++) { const px = Math.round(tx + x * scale) + 0.5; dctx.moveTo(px, ty + y0 * scale); dctx.lineTo(px, ty + y1 * scale); }
     for (let y = y0; y <= y1; y++) { const py = Math.round(ty + y * scale) + 0.5; dctx.moveTo(tx + x0 * scale, py); dctx.lineTo(tx + x1 * scale, py); }
     dctx.stroke();
   }
-  if (sel) {
-    const px = tx + sel.x * scale, py = ty + sel.y * scale, sz = Math.max(scale, 4);
-    dctx.lineWidth = 3; dctx.strokeStyle = "#fff"; dctx.strokeRect(px - 0.5, py - 0.5, sz + 1, sz + 1);
-    dctx.lineWidth = 1; dctx.strokeStyle = "#f0f"; dctx.strokeRect(px - 0.5, py - 0.5, sz + 1, sz + 1);
+  if (sel) {   // outline just outside the pixel so its real color stays visible
+    const px = tx + sel.x * scale, py = ty + sel.y * scale, sz = Math.max(scale, 1);
+    dctx.lineWidth = 3; dctx.strokeStyle = "#fff"; dctx.strokeRect(px - 1.5, py - 1.5, sz + 3, sz + 3);
+    dctx.lineWidth = 1; dctx.strokeStyle = "#f0f"; dctx.strokeRect(px - 1.5, py - 1.5, sz + 3, sz + 3);
   }
 }
 function redraw() { if (!raf) raf = requestAnimationFrame(render); }
@@ -186,10 +219,9 @@ function updateUI() {
   placeBtn.textContent = occupied ? "Pixel taken" : "Place pixel";
 }
 
-ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, SIZE, SIZE);
 resize(); fit(); window.addEventListener("resize", () => { resize(); clampPan(); });
 
-function draw(x, y, c) { taken.add(x + "_" + y); ctx.fillStyle = COLORS[c] || "#000"; ctx.fillRect(x, y, 1, 1); redraw(); }
+function draw(x, y, c) { taken.add(x + "_" + y); colors[y * SIZE + x] = c; redraw(); }
 
 async function sync() {
   if (document.hidden && ready) return;
