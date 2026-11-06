@@ -1,4 +1,4 @@
-const MAX = 5, SIZE = 1000, COLORS = 16;
+const MAX = 20, SIZE = 1000, COLORS = 16;
 const CORS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
@@ -45,7 +45,7 @@ export default {
       ).bind(x, y, c, ip, MAX).run();
       const r = await env.DB.prepare("SELECT COUNT(*) AS n FROM pixels WHERE ip = ?").bind(ip).first();
       if (res.meta.changes === 1) return json({ ok: true, used: r.n });
-      if (r.n >= MAX) return json({ error: "You've used all 5 pixels.", used: r.n }, 429);
+      if (r.n >= MAX) return json({ error: `You've used all ${MAX} pixels.`, used: r.n }, 429);
       return json({ error: "That pixel is already taken.", used: r.n }, 409);
     }
 

@@ -22,6 +22,7 @@
   #stage { position:absolute; left:0; top:0; transform-origin:0 0; will-change:transform; }
   canvas { display:block; image-rendering:pixelated; background:#fff; }
   #sel { position:absolute; border:1px solid #f0f; outline:1px solid #fff; pointer-events:none; display:none; }
+  #grid { position:absolute; left:0; top:0; pointer-events:none; }
   #msg { position:absolute; left:50%; bottom:14px; transform:translateX(-50%); background:#000c; padding:8px 14px; border-radius:8px; display:none; max-width:90%; }
 </style>
 </head>
@@ -30,6 +31,7 @@
   <h1>1000×1000 Pixel Canvas</h1>
   <div id="palette"></div>
   <button class="act" id="place" disabled>Place pixel</button>
+  <button class="act" id="gridBtn" style="background:#3a3a42">Grid: off</button>
   <button class="sm" id="zin" title="Zoom in">+</button>
   <button class="sm" id="zout" title="Zoom out">−</button>
   <span id="status">Connecting…</span>
@@ -39,12 +41,13 @@
     <canvas id="cv" width="1000" height="1000"></canvas>
     <div id="sel"></div>
   </div>
+  <canvas id="grid"></canvas>
   <div id="msg"></div>
 </div>
 
 <script type="module">
 
-const MAX = 5, SIZE = 1000;
+const MAX = 20, SIZE = 1000;
 const COLORS = ["#ffffff","#e4e4e4","#888888","#222222","#ffa7d1","#e50000","#e59500","#a06a42",
                 "#e5d900","#94e044","#02be01","#00d3dd","#0083c7","#0000ea","#cf6ee4","#820080"];
 
@@ -65,7 +68,24 @@ function toast(t) { msgEl.textContent = t; msgEl.style.display = "block"; clearT
 
 // ---- pan / zoom ----
 let scale = 1, tx = 0, ty = 0;
-function apply() { stage.style.transform = `translate(${tx}px,${ty}px) scale(${scale})`; }
+const gridCv = $("grid"), gctx = gridCv.getContext("2d");
+let gridOn = false;
+function drawGrid() {
+  const w = view.clientWidth, h = view.clientHeight;
+  if (gridCv.width !== w || gridCv.height !== h) { gridCv.width = w; gridCv.height = h; }
+  gctx.clearRect(0, 0, w, h);
+  if (!gridOn || scale < 6) return;
+  const x0 = Math.max(0, Math.floor(-tx / scale)), x1 = Math.min(SIZE, Math.ceil((w - tx) / scale));
+  const y0 = Math.max(0, Math.floor(-ty / scale)), y1 = Math.min(SIZE, Math.ceil((h - ty) / scale));
+  gctx.strokeStyle = "rgba(0,0,0,0.3)"; gctx.lineWidth = 1; gctx.beginPath();
+  for (let x = x0; x <= x1; x++) { const px = Math.round(tx + x * scale) + 0.5; gctx.moveTo(px, ty + y0 * scale); gctx.lineTo(px, ty + y1 * scale); }
+  for (let y = y0; y <= y1; y++) { const py = Math.round(ty + y * scale) + 0.5; gctx.moveTo(tx + x0 * scale, py); gctx.lineTo(tx + x1 * scale, py); }
+  gctx.stroke();
+}
+function apply() { stage.style.transform = `translate(${tx}px,${ty}px) scale(${scale})`; drawGrid(); }
+function setGrid(on) { gridOn = on; $("gridBtn").textContent = "Grid: " + (on ? "on" : "off"); if (on && scale < 6) zoomAt(6 / scale, view.clientWidth / 2, view.clientHeight / 2); else drawGrid(); }
+$("gridBtn").onclick = () => setGrid(!gridOn);
+addEventListener("keydown", e => { if (e.key === "g" || e.key === "G") setGrid(!gridOn); });
 function fit() {
   scale = Math.max(0.2, Math.min(view.clientWidth, view.clientHeight) / SIZE);
   tx = (view.clientWidth - SIZE * scale) / 2; ty = (view.clientHeight - SIZE * scale) / 2; apply();
