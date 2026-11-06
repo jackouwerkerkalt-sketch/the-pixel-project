@@ -22,6 +22,9 @@
   #picker.open { display:flex; }
   #picker .row { display:flex; align-items:center; gap:8px; }
   #picker label { width:46px; white-space:nowrap; font:13px ui-monospace,monospace; color:#aaa; }
+  #eyedrop { display:none; background:#3b82f6; color:#fff; border:0; border-radius:6px; padding:7px 10px; cursor:pointer; font-size:13px; }
+  #eyedrop.ok { display:block; }
+  #eyedrop:disabled { background:#444; color:#999; cursor:wait; }
   #picker input[type=color] { width:100%; height:90px; border:0; padding:0; background:none; cursor:pointer; }
   #picker input[type=range] { flex:1; min-width:0; }
   #picker input[type=number], #picker #hex { width:64px; background:#1b1b1f; color:#eee; border:1px solid #444; border-radius:5px; padding:4px 6px; font:13px ui-monospace,monospace; }
@@ -48,6 +51,7 @@
   <span id="status">Connecting…</span>
 </header>
 <div id="picker">
+  <button id="eyedrop" title="Pick a color from anywhere on your screen, including other windows">Pick from screen</button>
   <input type="color" id="cpick">
   <div class="row"><label>Hex&nbsp;#</label><input id="hex" maxlength="7" spellcheck="false" autocomplete="off"></div>
   <div class="row"><label style="color:#f66">R</label><input type="range" id="rr" min="0" max="255"><input type="number" id="rn" min="0" max="255"></div>
@@ -100,6 +104,16 @@ function setColor(c, skip) {
   });
   swatches.forEach((b, i) => b.classList.toggle("sel", parseInt(COLORS[i].slice(1), 16) === color));
   redraw();
+}
+// eyedropper: grab a color from anywhere on screen, even other windows/apps (Chromium browsers only)
+if ("EyeDropper" in window) {
+  $("eyedrop").classList.add("ok");
+  $("eyedrop").onclick = async () => {
+    const btn = $("eyedrop"); btn.disabled = true; btn.textContent = "Click anywhere on screen… (Esc cancels)";
+    try { const r = await new EyeDropper().open(); setColor(parseInt(r.sRGBHex.slice(1), 16)); }
+    catch (e) { /* cancelled */ }
+    btn.disabled = false; btn.textContent = "Pick from screen";
+  };
 }
 $("colorBtn").onclick = e => { e.stopPropagation(); picker.classList.toggle("open"); };
 document.addEventListener("pointerdown", e => { if (!picker.contains(e.target) && !$("colorBtn").contains(e.target)) picker.classList.remove("open"); });
