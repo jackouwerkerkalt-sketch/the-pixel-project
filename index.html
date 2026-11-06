@@ -243,12 +243,12 @@ async function sync() {
   try {
     let more = true;
     while (more) {
-      const r = await (await fetch(`${API_URL}/pixels?since=${lastId}`)).json();
+      const r = await (await fetch(`${API_URL}/pixels?since=${lastId}`, { cache: "no-store" })).json();
       for (let i = 0; i < r.p.length; i += 4) { draw(r.p[i + 1], r.p[i + 2], r.p[i + 3]); lastId = r.p[i]; }
       more = r.more;
     }
     if (!ready) {
-      used = (await (await fetch(`${API_URL}/me`)).json()).used; ready = true;
+      used = (await (await fetch(`${API_URL}/me`, { cache: "no-store" })).json()).used; ready = true;
     }
     updateUI();
   } catch (e) { statusEl.textContent = "Connection problem – retrying…"; }

@@ -19,3 +19,6 @@ Each IP address may place **100 pixels max** (enforced in the Worker). Pixels ar
 ## Notes
 - People behind the same Wi-Fi/VPN share an IP, so they share the 5 pixels; someone with a VPN can get more.
 - Free tier: 100k D1 writes/day, 100k Worker requests/day. Clients poll every 3s, so ~30k visitor-minutes/day before the request cap.
+
+## Backup
+The canvas lives only in the D1 database. To save a copy: `cd worker && npx wrangler d1 export pixel-canvas --remote --output=backup.sql`

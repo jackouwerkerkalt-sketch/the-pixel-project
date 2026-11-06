@@ -5,7 +5,7 @@ const CORS = {
   "Access-Control-Allow-Headers": "Content-Type",
 };
 const json = (o, status = 200) =>
-  new Response(JSON.stringify(o), { status, headers: { ...CORS, "Content-Type": "application/json" } });
+  new Response(JSON.stringify(o), { status, headers: { ...CORS, "Content-Type": "application/json", "Cache-Control": "no-store" } });
 
 async function ipHash(request) {
   const ip = request.headers.get("CF-Connecting-IP") || "unknown";
