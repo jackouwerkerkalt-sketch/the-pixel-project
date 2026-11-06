@@ -41,7 +41,6 @@
   <h1>1000×1000 Pixel Canvas</h1>
   <div id="palette"></div>
   <button id="colorBtn" title="Custom color"><span id="colorSw"></span><span id="colorHex">#E50000</span></button>
-  <button class="act" id="place" disabled>Place pixel</button>
   <button class="act" id="eraseBtn" style="background:#3a3a42" title="Erase your own pixels (E)">Eraser: off</button>
   <button class="act" id="gridBtn" style="background:#3a3a42">Grid: off</button>
   <button class="sm" id="zin" title="Zoom in">+</button>
@@ -73,7 +72,7 @@ const colors = new Int32Array(SIZE * SIZE).fill(-1);
 let img = null, buf = null;
 const $ = id => document.getElementById(id);
 const view = $("view"), disp = $("disp"), dctx = disp.getContext("2d"),
-      placeBtn = $("place"), statusEl = $("status"), msgEl = $("msg");
+      statusEl = $("status"), msgEl = $("msg");
 
 // ---- palette ----
 let color = 0xe50000;
@@ -280,10 +279,20 @@ addEventListener("keydown", e => {
   else if (k === "+" || k === "=") return zoomAt(1.5, ...center());
   else if (k === "-") return zoomAt(1 / 1.5, ...center());
   else if (k === "0") return fit();
-  else if (k === "enter" && !placeBtn.disabled) return placeBtn.click();
   else return;
   clampPan(); redraw();
 });
+
+view.addEventListener("pointermove", e => {                  // hover preview of the pixel you're about to place
+  if (pts.size || e.pointerType !== "mouse") return;
+  let n = null;
+  if (!eraseMode && scale >= 8) {
+    const r = view.getBoundingClientRect(), x = Math.floor((e.clientX - r.left - tx) / scale), y = Math.floor((e.clientY - r.top - ty) / scale);
+    if (x >= 0 && y >= 0 && x < SIZE && y < SIZE) n = { x, y };
+  }
+  if ((n && n.x) !== (sel && sel.x) || (n && n.y) !== (sel && sel.y) || !n !== !sel) { sel = n; redraw(); updateUI(); }
+});
+view.addEventListener("pointerleave", () => { if (sel) { sel = null; redraw(); updateUI(); } });
 
 function selectAt(cx, cy) {
   const r = view.getBoundingClientRect();
@@ -292,7 +301,7 @@ function selectAt(cx, cy) {
   sel = (x < 0 || y < 0 || x >= SIZE || y >= SIZE) ? null : { x, y };
   if (sel && scale < 8) {                                      // too small to place accurately: zoom in on it
     scale = 12; tx = view.clientWidth / 2 - (sel.x + 0.5) * scale; ty = view.clientHeight / 2 - (sel.y + 0.5) * scale; clampPan();
-  }
+  } else if (sel) placePixel(x, y);                            // zoomed in enough to be precise: click places your color
   redraw(); updateUI();
 }
 
@@ -307,15 +316,13 @@ $("eraseBtn").onclick = () => setErase(!eraseMode);
 // ---- backend (Cloudflare Worker) ----
 import { API_URL } from "./config.js";
 let used = 0, ready = false, lastId = 0;
-let erasePixel = () => {};
+let erasePixel = () => {}, placePixel = () => {};
+const pending = new Set();
 const taken = new Set();
 
 function updateUI() {
   const left = MAX - used;
   statusEl.textContent = !ready ? "Connecting…" : `${left} of ${MAX} pixels left` + (sel ? ` · (${sel.x}, ${sel.y})` : "");
-  const occupied = sel && taken.has(sel.x + "_" + sel.y);
-  placeBtn.disabled = eraseMode || !(ready && left > 0 && sel && !occupied);
-  placeBtn.textContent = occupied ? "Pixel taken" : "Place pixel";
 }
 
 setColor(color); resize(); fit(); window.addEventListener("resize", () => { resize(); clampPan(); });
@@ -349,17 +356,20 @@ if (API_URL.includes("YOUR-SUBDOMAIN")) {
   statusEl.textContent = "Not configured – see README.md";
 } else {
   sync(); setInterval(sync, 3000);
-  placeBtn.onclick = async () => {
-    if (!sel) return;
-    const { x, y } = sel; placeBtn.disabled = true;
+  placePixel = async (x, y) => {
+    const key = x + "_" + y;
+    if (!ready || pending.has(key)) return;
+    if (used >= MAX) return toast(`You've used all ${MAX} pixels. Erase one to place another.`);
+    if (taken.has(key)) return toast("That pixel is already taken.");
+    pending.add(key);
     try {
       const res = await fetch(`${API_URL}/place`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ x, y, c: color, v: 2 }) });
       const r = await res.json();
       if (r.used !== undefined) used = r.used;
-      if (res.ok) { draw(x, y, color); mine.add(y * SIZE + x); sel = null; redraw(); toast("Pixel placed!"); }
-      else { if (res.status === 409) taken.add(x + "_" + y); toast(r.error || "Couldn't place pixel"); }
+      if (res.ok) { draw(x, y, color); mine.add(y * SIZE + x); }
+      else { if (res.status === 409) taken.add(key); toast(r.error || "Couldn't place pixel"); }
     } catch (e) { toast("Network error"); }
-    updateUI();
+    pending.delete(key); updateUI();
   };
   erasePixel = async (x, y) => {
     if (!mine.has(y * SIZE + x)) return toast(taken.has(x + "_" + y) ? "That's someone else's pixel. You can only erase your own." : "Nothing to erase there.");
