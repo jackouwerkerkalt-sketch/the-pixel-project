@@ -29,3 +29,6 @@ You can erase only your own pixels (matched by IP on the server). Erasing frees 
 ## Admin (owner only)
 Admin powers need a secret token, stored as the Worker secret `ADMIN_TOKEN` (never in this repo; set with `npx wrangler secret put ADMIN_TOKEN`).
 In the page press **Shift+A** (or double-click the title) and enter the token. You get unlimited pixels, can erase anyone's pixel (Eraser) or a whole area, and can import an image (max 25,000 pixels per import; every pixel costs ~3 of Cloudflare's 100k free daily database writes).
+
+## Draw mode
+The **Drag: move/draw** button (or `B`) switches dragging from panning to painting. Strokes are sent in batches via `/place-many` (same per-IP limit; live pixels are never overwritten). Hold Space or use the right/middle mouse button to pan while drawing. Works at 4× zoom or closer.

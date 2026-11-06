@@ -63,6 +63,29 @@ export default {
       return json({ error: "That pixel is already taken.", used: r.n }, 409);
     }
 
+    // place many at once (drag-drawing): same rules as /place (per-IP limit, live pixels never overwritten), one request
+    if (url.pathname === "/place-many" && request.method === "POST") {
+      let b; try { b = await request.json(); } catch { return json({ error: "bad request" }, 400); }
+      const list = b && b.pixels;
+      if (!Array.isArray(list) || list.length === 0 || list.length > 500) return json({ error: "bad request" }, 400);
+      const cells = new Map();
+      for (const p of list) {
+        if (!Array.isArray(p) || !isInt(p[0], 0, SIZE - 1) || !isInt(p[1], 0, SIZE - 1) || !isInt(p[2], 0, 0xFFFFFF)) return json({ error: "bad request" }, 400);
+        cells.set(p[0] * SIZE + p[1], [p[0], p[1], p[2]]);          // last write per cell wins
+      }
+      const ip = await ipHash(request);
+      const before = await env.DB.prepare("SELECT COALESCE(MAX(id), 0) AS m FROM pixels").first();
+      await env.DB.prepare(
+        `INSERT OR REPLACE INTO pixels (x, y, c, ip)
+         SELECT jx, jy, jc, ?2 FROM (SELECT json_extract(value, '$[0]') AS jx, json_extract(value, '$[1]') AS jy, json_extract(value, '$[2]') AS jc FROM json_each(?1))
+         WHERE NOT EXISTS (SELECT 1 FROM pixels q WHERE q.c >= 0 AND q.x = jx AND q.y = jy)
+         LIMIT MAX(0, ?3 - (SELECT COUNT(*) FROM pixels WHERE c >= 0 AND ip = ?2))`
+      ).bind(JSON.stringify([...cells.values()]), ip, MAX).run();
+      const { results } = await env.DB.prepare("SELECT x, y FROM pixels WHERE ip = ? AND c >= 0 AND id > ?").bind(ip, before.m).all();
+      const r = await env.DB.prepare("SELECT COUNT(*) AS n FROM pixels WHERE c >= 0 AND ip = ?").bind(ip).first();
+      return json({ ok: true, placed: results.map(q => [q.x, q.y]), used: r.n });
+    }
+
     // which pixels are mine (so the client knows what it may erase)
     if (url.pathname === "/mine" && request.method === "GET") {
       const ip = await ipHash(request);
