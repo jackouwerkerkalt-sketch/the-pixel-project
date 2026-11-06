@@ -44,6 +44,7 @@
   #view.drag { cursor:grabbing; }
   #view.erasing, #view.drawing { cursor:crosshair; }
   #drawBtn.on { background:#16a34a !important; }
+  #lineBtn.on { background:#0891b2 !important; }
   #eraseBtn.on { background:#d33 !important; }
   #disp { position:absolute; left:0; top:0; width:100%; height:100%; display:block; }
   #msg { position:absolute; left:50%; bottom:14px; transform:translateX(-50%); background:#000c; padding:8px 14px; border-radius:8px; display:none; max-width:90%; }
@@ -55,6 +56,7 @@
   <div id="palette"></div>
   <button id="colorBtn" title="Custom color"><span id="colorSw"></span><span id="colorHex">#E50000</span></button>
   <button class="act" id="drawBtn" style="background:#3a3a42" title="Drag to paint pixels instead of moving the canvas (B). Hold Space or use right/middle mouse to pan.">Drag: move</button>
+  <button class="act" id="lineBtn" style="background:#3a3a42" title="Draw a straight line (L): drag, or click start then click end. Shift snaps angles. Esc cancels.">Line: off</button>
   <button class="act" id="eraseBtn" style="background:#3a3a42" title="Erase your own pixels (E)">Eraser: off</button>
   <button class="act" id="gridBtn" style="background:#3a3a42">Grid: off</button>
   <button class="act" id="adminBtn" style="display:none;background:#7c3aed">Admin</button>
@@ -166,6 +168,7 @@ function toast(t) { msgEl.textContent = t; msgEl.style.display = "block"; clearT
 
 // ---- view: one viewport-sized canvas, only visible pixels are drawn ----
 let adminOn = false, adminToken = "", areaMode = false, area = null, impMode = false, imp = null, impCv = null, impPos = null;
+let lineMode = false, lineA = null, lineB = null, lineDown = false, lineArmed = false;
 let drawMode = false, stroke = null, spaceHeld = false; const strokeQueue = [];
 let eraseMode = false; const mine = new Set();   // mine: y*SIZE+x of pixels I placed
 let scale = 1, tx = 0, ty = 0, gridOn = false, sel = null, dpr = 1, raf = 0;
@@ -226,6 +229,14 @@ function render() {
       const cx = tx + (x + 0.5) * scale, cy = ty + (y + 0.5) * scale;
       dctx.strokeRect(Math.round(cx - m / 2) + 0.5, Math.round(cy - m / 2) + 0.5, m, m);
     }
+  }
+  if (lineMode && lineA && lineB) {                            // line preview
+    dctx.fillStyle = hexOf(color); dctx.globalAlpha = 0.85; const sz = Math.max(scale, 2);
+    for (const [x, y] of lineCells(lineA, lineB)) dctx.fillRect(tx + (x + 0.5) * scale - sz / 2, ty + (y + 0.5) * scale - sz / 2, sz, sz);
+    dctx.globalAlpha = 1;
+    const ax = tx + lineA.x * scale, ay = ty + lineA.y * scale, as = Math.max(scale, 6), ac = scale / 2;
+    dctx.lineWidth = 3; dctx.strokeStyle = "#fff"; dctx.strokeRect(ax + ac - as / 2 - 1, ay + ac - as / 2 - 1, as + 2, as + 2);
+    dctx.lineWidth = 1; dctx.strokeStyle = "#0891b2"; dctx.strokeRect(ax + ac - as / 2 - 1, ay + ac - as / 2 - 1, as + 2, as + 2);
   }
   if (area) {                                                  // admin: area-erase rectangle
     const ax0 = Math.min(area.a.x, area.b.x), ax1 = Math.max(area.a.x, area.b.x), ay0 = Math.min(area.a.y, area.b.y), ay1 = Math.max(area.a.y, area.b.y);
@@ -298,6 +309,7 @@ const pts = new Map(); let moved = false, start = null, lastPinch = 0;
 const pixAt = e => { const r = view.getBoundingClientRect(); return { x: Math.max(0, Math.min(SIZE - 1, Math.floor((e.clientX - r.left - tx) / scale))), y: Math.max(0, Math.min(SIZE - 1, Math.floor((e.clientY - r.top - ty) / scale))) }; };
 view.addEventListener("pointerdown", e => {
   if (areaMode && pts.size === 0 && e.button === 0) area = { a: pixAt(e), b: pixAt(e) };
+  if (lineActive() && pts.size === 0 && e.button === 0 && !spaceHeld) { const a = pixAt(e); lineArmed = !!lineA; if (!lineA) lineA = a; lineB = snapLine(a, e.shiftKey); lineDown = true; redraw(); updateUI(); }
   if (drawActive() && pts.size === 0 && e.button === 0 && !spaceHeld) { stroke = { last: null, warned: false }; extendStroke(pixAt(e)); }
   view.setPointerCapture(e.pointerId); pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
   if (pts.size === 1) { start = { x: e.clientX, y: e.clientY }; moved = false; }
@@ -307,6 +319,8 @@ view.addEventListener("pointermove", e => {
   const p = pts.get(e.pointerId); if (!p) return;
   const dx = e.clientX - p.x, dy = e.clientY - p.y; p.x = e.clientX; p.y = e.clientY;
   if (area) { area.b = pixAt(e); redraw(); return; }
+  if (lineDown && pts.size < 2) { lineB = snapLine(pixAt(e), e.shiftKey); redraw(); updateUI(); return; }
+  if (lineDown) { lineDown = false; if (!lineArmed) lineA = null; redraw(); }       // second finger: pinch instead
   if (stroke && pts.size < 2) { extendStroke(pixAt(e)); return; }
   if (stroke) stroke = null;                                 // second finger: switch to pinch zoom
   if (pts.size >= 2) {
@@ -323,13 +337,14 @@ function up(e) {
   if (pts.size === 1) moved = true;                         // finger left after a pinch: don't treat as a click
   if (pts.size === 0) {
     view.classList.remove("drag");
-    if (stroke) { stroke = null; flushStrokes(); }
+    if (lineDown) { lineDown = false; if (e.type === "pointerup") finishLinePress(e); else { if (!lineArmed) lineA = null; redraw(); updateUI(); } }
+    else if (stroke) { stroke = null; flushStrokes(); }
     else if (area) { if (e.type === "pointerup") finishArea(); else { area = null; redraw(); } }
     else if (!moved && e.type === "pointerup") selectAt(e.clientX, e.clientY);
   }
 }
 view.addEventListener("pointerup", up); view.addEventListener("pointercancel", up);
-view.addEventListener("contextmenu", e => { if (drawMode) e.preventDefault(); });
+view.addEventListener("contextmenu", e => { if (drawMode || lineMode) e.preventDefault(); });
 view.addEventListener("dblclick", e => { const r = view.getBoundingClientRect(); zoomAt(2, e.clientX - r.left, e.clientY - r.top); });
 
 addEventListener("keyup", e => { if (e.code === "Space") { spaceHeld = false; e.preventDefault(); } });
@@ -338,8 +353,9 @@ addEventListener("keydown", e => {
   const step = 80, k = e.key.toLowerCase();
   if (e.code === "Space") { spaceHeld = true; e.preventDefault(); return; }
   if (k === "b") return setDraw(!drawMode);
+  if (k === "l") return setLine(!lineMode);
   if (e.shiftKey && k === "a") { adminOn ? toggleAdminPanel() : unlockAdmin(); return; }
-  if (k === "escape") { if (impMode) cancelImport(); if (areaMode) setArea(false); picker.classList.remove("open"); return; }
+  if (k === "escape") { if (lineA) { lineA = null; lineDown = false; redraw(); updateUI(); } if (impMode) cancelImport(); if (areaMode) setArea(false); picker.classList.remove("open"); return; }
   if (k === "g") setGrid(!gridOn);
   else if (k === "e") setErase(!eraseMode);
   else if (k === "arrowleft" || k === "a") tx += step;
@@ -354,6 +370,7 @@ addEventListener("keydown", e => {
 });
 
 view.addEventListener("pointermove", e => {                  // hover preview of the pixel you're about to place
+  if (lineMode && lineA && e.pointerType === "mouse" && !pts.size) { lineB = snapLine(pixAt(e), e.shiftKey); redraw(); updateUI(); return; }
   if (impMode && e.pointerType === "mouse" && !pts.size) { impPos = impOrigin(pixAt(e)); redraw(); return; }
   if (pts.size || e.pointerType !== "mouse") return;
   let n = null;
@@ -380,7 +397,7 @@ function selectAt(cx, cy) {
 function setErase(on) {
   eraseMode = on; $("eraseBtn").textContent = "Eraser: " + (on ? "on" : "off");
   $("eraseBtn").classList.toggle("on", on); view.classList.toggle("erasing", on);
-  if (on) { sel = null; if (areaMode) setArea(false); if (drawMode) setDraw(false); cancelImport(); toast(adminOn ? "Eraser on: click any pixel to delete it" : "Eraser on: click one of your own pixels (outlined in red) to remove it"); }
+  if (on) { sel = null; if (areaMode) setArea(false); if (drawMode) setDraw(false); if (lineMode) setLine(false); cancelImport(); toast(adminOn ? "Eraser on: click any pixel to delete it" : "Eraser on: click one of your own pixels (outlined in red) to remove it"); }
   redraw(); updateUI();
 }
 $("eraseBtn").onclick = () => setErase(!eraseMode);
@@ -389,9 +406,9 @@ $("eraseBtn").onclick = () => setErase(!eraseMode);
 const drawActive = () => drawMode && !eraseMode && !areaMode && !impMode;
 function setDraw(on) {
   drawMode = on; $("drawBtn").textContent = "Drag: " + (on ? "draw" : "move"); $("drawBtn").classList.toggle("on", on);
-  view.classList.toggle("drawing", on);
+  view.classList.toggle("drawing", on || lineMode);
   if (on) {
-    if (eraseMode) setErase(false); if (areaMode) setArea(false); cancelImport(); sel = null;
+    if (eraseMode) setErase(false); if (areaMode) setArea(false); if (lineMode) setLine(false); cancelImport(); sel = null;
     toast(scale < 4 ? "Draw mode: zoom in (4× or more), then drag to paint. Space or right-drag pans." : "Draw mode: drag to paint. Hold Space or right-drag to pan.");
   }
   redraw(); updateUI();
@@ -447,6 +464,57 @@ async function flushStrokes() {
 }
 setInterval(flushStrokes, 250);
 
+// ---- line tool ----
+const lineActive = () => lineMode && !drawMode && !eraseMode && !areaMode && !impMode;
+function setLine(on) {
+  lineMode = on; lineA = lineB = null; lineDown = false;
+  $("lineBtn").textContent = "Line: " + (on ? "on" : "off"); $("lineBtn").classList.toggle("on", on);
+  view.classList.toggle("drawing", on || drawMode);
+  if (on) {
+    if (drawMode) setDraw(false); if (eraseMode) setErase(false); if (areaMode) setArea(false); cancelImport(); sel = null;
+    toast("Line tool: drag from start to end, or click the start, move/zoom, then click the end. Shift snaps angles, Esc cancels. Space or right-drag pans.");
+  }
+  redraw(); updateUI();
+}
+$("lineBtn").onclick = () => setLine(!lineMode);
+function lineCells(a, b) {                                      // Bresenham: every cell of the straight line a to b
+  const out = []; let x = a.x, y = a.y; const dx = Math.abs(b.x - x), dy = -Math.abs(b.y - y), sx = x < b.x ? 1 : -1, sy = y < b.y ? 1 : -1; let err = dx + dy;
+  for (;;) {
+    out.push([x, y]);
+    if (x === b.x && y === b.y) break;
+    const e2 = 2 * err; if (e2 >= dy) { err += dy; x += sx; } if (e2 <= dx) { err += dx; y += sy; }
+  }
+  return out;
+}
+function snapLine(p, shift) {                                   // Shift: lock to horizontal, vertical or 45 degrees
+  if (!shift || !lineA) return p;
+  const dx = p.x - lineA.x, dy = p.y - lineA.y, ax = Math.abs(dx), ay = Math.abs(dy);
+  if (ay * 2 < ax) return { x: p.x, y: lineA.y };
+  if (ax * 2 < ay) return { x: lineA.x, y: p.y };
+  const len = Math.min(Math.max(ax, ay), dx >= 0 ? SIZE - 1 - lineA.x : lineA.x, dy >= 0 ? SIZE - 1 - lineA.y : lineA.y);
+  return { x: lineA.x + Math.sign(dx) * len, y: lineA.y + Math.sign(dy) * len };
+}
+function finishLinePress(e) {
+  lineB = snapLine(pixAt(e), e.shiftKey);
+  if (lineB.x === lineA.x && lineB.y === lineA.y && !lineArmed) { toast("Start set. Click or drag to the end point (Esc cancels)."); redraw(); updateUI(); return; }   // a plain click: wait for the end point
+  const a = lineA, b = lineB; lineA = lineB = null; redraw(); placeLine(a, b);
+}
+function placeLine(a, b) {
+  if (!ready) return;
+  let cells = lineCells(a, b), skipped = 0;
+  if (adminOn) cells = cells.filter(([x, y]) => colors[y * SIZE + x] !== color);
+  else { const free = cells.filter(([x, y]) => !taken.has(x + "_" + y)); skipped = cells.length - free.length; cells = free; }
+  if (!cells.length) { updateUI(); return toast(skipped ? "Every pixel on that line is already taken." : "Nothing to place."); }
+  if (!adminOn && cells.length > MAX - used) { updateUI(); return toast(`That line needs ${cells.length} pixels but you only have ${Math.max(0, MAX - used)} left.`); }
+  for (const [x, y] of cells) {
+    if (!adminOn) used++;
+    strokeQueue.push([x, y, color, colors[y * SIZE + x]]);
+    draw(x, y, color);                                          // optimistic, rolled back if the server refuses
+  }
+  toast(`Line: ${cells.length} pixel${cells.length === 1 ? "" : "s"}` + (skipped ? ` (${skipped} skipped, already taken)` : ""));
+  updateUI(); flushStrokes();
+}
+
 // ---- admin (secret token lives in the Worker; this page only stores what you type) ----
 const adm = async (path, body) => {
   const res = await fetch(`${API_URL}${path}`, { method: "POST", headers: { "Content-Type": "application/json", "X-Admin-Token": adminToken }, body: JSON.stringify(body) });
@@ -477,7 +545,7 @@ document.addEventListener("pointerdown", e => { if (!adminPanel.contains(e.targe
 function setArea(on) {
   areaMode = on; area = null; $("areaBtn").textContent = "Erase area: " + (on ? "on (drag a box)" : "off"); $("areaBtn").classList.toggle("on", on);
   view.classList.toggle("erasing", on || eraseMode);
-  if (on) { if (eraseMode) setErase(false); if (drawMode) setDraw(false); cancelImport(); adminPanel.classList.remove("open"); toast("Drag a box over the pixels to delete. Esc cancels."); }
+  if (on) { if (eraseMode) setErase(false); if (drawMode) setDraw(false); if (lineMode) setLine(false); cancelImport(); adminPanel.classList.remove("open"); toast("Drag a box over the pixels to delete. Esc cancels."); }
   redraw();
 }
 $("areaBtn").onclick = () => setArea(!areaMode);
@@ -522,7 +590,7 @@ function buildImport() {
 }
 $("impGo").onclick = () => {
   if (!imp) return;
-  if (eraseMode) setErase(false); if (areaMode) setArea(false); if (drawMode) setDraw(false);
+  if (eraseMode) setErase(false); if (areaMode) setArea(false); if (drawMode) setDraw(false); if (lineMode) setLine(false);
   impMode = true; impPos = impOrigin({ x: Math.floor(SIZE / 2), y: Math.floor(SIZE / 2) }); adminPanel.classList.remove("open");
   toast("Move over the canvas and click to place the image (Esc cancels)"); redraw();
 };
@@ -559,7 +627,7 @@ const taken = new Set();
 
 function updateUI() {
   const left = MAX - used;
-  statusEl.textContent = !ready ? "Connecting…" : (adminOn ? "Admin · unlimited pixels" : `${left} of ${MAX} pixels left`) + (sel ? ` · (${sel.x}, ${sel.y})` : "");
+  statusEl.textContent = !ready ? "Connecting…" : (adminOn ? "Admin · unlimited pixels" : `${left} of ${MAX} pixels left`) + (sel ? ` · (${sel.x}, ${sel.y})` : "") + (lineMode && lineA && lineB ? ` · line ${lineCells(lineA, lineB).length} px` : "");
 }
 
 setColor(color); resize(); fit(); window.addEventListener("resize", () => { resize(); clampPan(); });

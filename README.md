@@ -32,3 +32,6 @@ In the page press **Shift+A** (or double-click the title) and enter the token. Y
 
 ## Draw mode
 The **Drag: move/draw** button (or `B`) switches dragging from panning to painting. Strokes are sent in batches via `/place-many` (same per-IP limit; live pixels are never overwritten). Hold Space or use the right/middle mouse button to pan while drawing. Works at 4× zoom or closer.
+
+## Line tool
+The **Line** button (or `L`) draws straight lines of any length: drag from start to end, or click the start, pan/zoom, then click the end. Shift snaps to horizontal/vertical/45°; Esc cancels. Lines skip taken pixels, count against your limit (refused if it wouldn't fit), and are sent in batches of 500.
