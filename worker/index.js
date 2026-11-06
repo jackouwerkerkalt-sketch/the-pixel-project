@@ -1,4 +1,5 @@
-const MAX = 500, SIZE = 1000, COLORS = 16;
+const MAX = 500, SIZE = 1000;
+const LEGACY = [0xffffff,0xe4e4e4,0x888888,0x222222,0xffa7d1,0xe50000,0xe59500,0xa06a42,0xe5d900,0x94e044,0x02be01,0x00d3dd,0x0083c7,0x0000ea,0xcf6ee4,0x820080]; // old clients sent palette indexes 0-15
 const CORS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
@@ -35,9 +36,10 @@ export default {
 
     if (url.pathname === "/place" && request.method === "POST") {
       let b; try { b = await request.json(); } catch { return json({ error: "bad request" }, 400); }
-      const { x, y, c } = b || {};
-      if (![x, y, c].every(Number.isInteger) || x < 0 || y < 0 || x >= SIZE || y >= SIZE || c < 0 || c >= COLORS)
+      let { x, y, c } = b || {};
+      if (![x, y, c].every(Number.isInteger) || x < 0 || y < 0 || x >= SIZE || y >= SIZE || c < 0 || c > 0xFFFFFF)
         return json({ error: "bad request" }, 400);
+      if (b.v !== 2) { if (c >= LEGACY.length) return json({ error: "bad request" }, 400); c = LEGACY[c]; }
       const ip = await ipHash(request);
       // single atomic statement: insert only if under the limit and cell is free
       const res = await env.DB.prepare(

@@ -16,6 +16,17 @@
   button.act { background:#3b82f6; color:#fff; border:0; border-radius:6px; padding:6px 12px; cursor:pointer; font-size:14px; }
   button.act:disabled { background:#444; color:#888; cursor:not-allowed; }
   button.sm { background:#3a3a42; color:#eee; border:0; border-radius:6px; width:30px; height:30px; cursor:pointer; font-size:16px; }
+  #colorBtn { display:flex; align-items:center; gap:6px; background:#3a3a42; color:#eee; border:0; border-radius:6px; padding:4px 10px 4px 5px; cursor:pointer; font:13px ui-monospace,monospace; }
+  #colorSw { width:22px; height:22px; border-radius:4px; border:2px solid #fff6; }
+  #picker { display:none; position:fixed; z-index:10; top:50px; left:12px; width:250px; padding:12px; background:#26262c; border:1px solid #000; border-radius:10px; box-shadow:0 8px 24px #000a; flex-direction:column; gap:8px; }
+  #picker.open { display:flex; }
+  #picker .row { display:flex; align-items:center; gap:8px; }
+  #picker label { width:46px; white-space:nowrap; font:13px ui-monospace,monospace; color:#aaa; }
+  #picker input[type=color] { width:100%; height:90px; border:0; padding:0; background:none; cursor:pointer; }
+  #picker input[type=range] { flex:1; min-width:0; }
+  #picker input[type=number], #picker #hex { width:64px; background:#1b1b1f; color:#eee; border:1px solid #444; border-radius:5px; padding:4px 6px; font:13px ui-monospace,monospace; }
+  #picker #hex { flex:1; width:auto; text-transform:uppercase; }
+  #picker #hex.bad { border-color:#e55; }
   #status { margin-left:auto; color:#aaa; }
   #view { flex:1; position:relative; overflow:hidden; cursor:grab; touch-action:none; background:#111; }
   #view.drag { cursor:grabbing; }
@@ -27,12 +38,20 @@
 <header>
   <h1>1000×1000 Pixel Canvas</h1>
   <div id="palette"></div>
+  <button id="colorBtn" title="Custom color"><span id="colorSw"></span><span id="colorHex">#E50000</span></button>
   <button class="act" id="place" disabled>Place pixel</button>
   <button class="act" id="gridBtn" style="background:#3a3a42">Grid: off</button>
   <button class="sm" id="zin" title="Zoom in">+</button>
   <button class="sm" id="zout" title="Zoom out">−</button>
   <span id="status">Connecting…</span>
 </header>
+<div id="picker">
+  <input type="color" id="cpick">
+  <div class="row"><label>Hex&nbsp;#</label><input id="hex" maxlength="7" spellcheck="false" autocomplete="off"></div>
+  <div class="row"><label style="color:#f66">R</label><input type="range" id="rr" min="0" max="255"><input type="number" id="rn" min="0" max="255"></div>
+  <div class="row"><label style="color:#6d6">G</label><input type="range" id="gr" min="0" max="255"><input type="number" id="gn" min="0" max="255"></div>
+  <div class="row"><label style="color:#69f">B</label><input type="range" id="br" min="0" max="255"><input type="number" id="bn" min="0" max="255"></div>
+</div>
 <div id="view">
   <canvas id="disp"></canvas>
   <div id="msg"></div>
@@ -44,22 +63,63 @@ const MAX = 500, SIZE = 1000;
 const COLORS = ["#ffffff","#e4e4e4","#888888","#222222","#ffa7d1","#e50000","#e59500","#a06a42",
                 "#e5d900","#94e044","#02be01","#00d3dd","#0083c7","#0000ea","#cf6ee4","#820080"];
 
-const PACK = COLORS.map(h => 0xff000000 | (parseInt(h.slice(5, 7), 16) << 16) | (parseInt(h.slice(3, 5), 16) << 8) | parseInt(h.slice(1, 3), 16));
-const WHITE = PACK[0], BG = 0xff111111 >>> 0;
-const colors = new Uint8Array(SIZE * SIZE).fill(255);   // 255 = untouched (white)
+// pixel colors are 24-bit RGB ints (0xRRGGBB); -1 = untouched (white)
+const pack = c => (0xff000000 | ((c & 255) << 16) | (c & 0xff00) | (c >> 16)) >>> 0;   // -> canvas ABGR
+const WHITE = 0xffffffff, BG = 0xff111111 >>> 0;
+const colors = new Int32Array(SIZE * SIZE).fill(-1);
 let img = null, buf = null;
 const $ = id => document.getElementById(id);
 const view = $("view"), disp = $("disp"), dctx = disp.getContext("2d"),
       placeBtn = $("place"), statusEl = $("status"), msgEl = $("msg");
 
 // ---- palette ----
-let color = 5;
-COLORS.forEach((c, i) => {
+let color = 0xe50000;
+const hexOf = c => "#" + c.toString(16).padStart(6, "0");
+const swatches = [];
+COLORS.forEach(h => {
   const b = document.createElement("button");
-  b.className = "sw" + (i === color ? " sel" : ""); b.style.background = c;
-  b.onclick = () => { color = i; redraw(); document.querySelectorAll(".sw").forEach((s, j) => s.classList.toggle("sel", j === i)); };
-  $("palette").appendChild(b);
+  b.className = "sw"; b.style.background = h; b.title = h;
+  b.onclick = () => setColor(parseInt(h.slice(1), 16));
+  $("palette").appendChild(b); swatches.push(b);
 });
+
+// ---- color picker: native picker + hex + RGB ----
+const picker = $("picker"), hexIn = $("hex"), cpick = $("cpick");
+const rgbIn = ["r", "g", "b"].map(k => ({ num: $(k + "n"), rng: $(k + "r") }));
+function setColor(c, skip) {
+  color = c & 0xffffff;
+  const h = hexOf(color);
+  $("colorSw").style.background = h; $("colorHex").textContent = h.toUpperCase();
+  if (skip !== "hex") hexIn.value = h.slice(1).toUpperCase();
+  if (skip !== "cpick") cpick.value = h;
+  [color >> 16, (color >> 8) & 255, color & 255].forEach((v, i) => {
+    if (skip !== "rgb" + i) { rgbIn[i].num.value = v; }
+    rgbIn[i].rng.value = v;
+  });
+  swatches.forEach((b, i) => b.classList.toggle("sel", parseInt(COLORS[i].slice(1), 16) === color));
+  redraw();
+}
+$("colorBtn").onclick = e => { e.stopPropagation(); picker.classList.toggle("open"); };
+document.addEventListener("pointerdown", e => { if (!picker.contains(e.target) && !$("colorBtn").contains(e.target)) picker.classList.remove("open"); });
+cpick.oninput = () => setColor(parseInt(cpick.value.slice(1), 16), "cpick");
+hexIn.oninput = () => {
+  let v = hexIn.value.trim().replace(/^#/, "");
+  if (/^[0-9a-f]{3}$/i.test(v)) v = v.split("").map(ch => ch + ch).join("");
+  hexIn.classList.toggle("bad", !/^[0-9a-f]{6}$/i.test(v));
+  if (/^[0-9a-f]{6}$/i.test(v)) setColor(parseInt(v, 16), "hex");
+};
+hexIn.onblur = () => { hexIn.classList.remove("bad"); hexIn.value = hexOf(color).slice(1).toUpperCase(); };
+rgbIn.forEach((o, i) => {
+  const set = v => {
+    v = Math.max(0, Math.min(255, Math.round(+v) || 0));
+    const ch = [color >> 16, (color >> 8) & 255, color & 255]; ch[i] = v;
+    setColor((ch[0] << 16) | (ch[1] << 8) | ch[2], "rgb" + i);
+  };
+  o.rng.oninput = () => set(o.rng.value);
+  o.num.oninput = () => { if (o.num.value !== "") set(o.num.value); };
+  o.num.onblur = () => { o.num.value = [color >> 16, (color >> 8) & 255, color & 255][i]; };
+});
+for (const el of [hexIn, ...rgbIn.map(o => o.num)]) el.addEventListener("keydown", e => e.stopPropagation());  // don't trigger map shortcuts while typing
 
 function toast(t) { msgEl.textContent = t; msgEl.style.display = "block"; clearTimeout(toast.t); toast.t = setTimeout(() => msgEl.style.display = "none", 3500); }
 
@@ -86,7 +146,7 @@ function render() {
         const row = yl * W, base = y * SIZE;
         for (let x = x0; x < x1; x++) {
           const xl = clampX(bx[x - x0]), xr = clampX(bx[x - x0 + 1]); if (xr <= xl) continue;
-          const c = colors[base + x]; buf.fill(c === 255 ? WHITE : PACK[c], row + xl, row + xr);
+          const c = colors[base + x]; buf.fill(c < 0 ? WHITE : pack(c), row + xl, row + xr);
         }
         for (let r = yl + 1; r < yr; r++) buf.copyWithin(r * W, row, row + W);
       }
@@ -98,10 +158,10 @@ function render() {
         const yl = Math.round(oy + y * s), yr = Math.max(yl + 1, Math.round(oy + (y + 1) * s)), base = y * SIZE;
         if (yr <= 0 || yl >= H) continue;
         for (let x = x0; x < x1; x++) {
-          const c = colors[base + x]; if (c === 255) continue;
+          const c = colors[base + x]; if (c < 0) continue;
           const xl = bx[x - x0], xr = Math.max(xl + 1, bx[x - x0 + 1]);
           const cl = clampX(xl), cr = clampX(xr); if (cr <= cl) continue;
-          for (let r = clampY(yl); r < clampY(yr); r++) buf.fill(PACK[c], r * W + cl, r * W + cr);
+          for (let r = clampY(yl); r < clampY(yr); r++) buf.fill(pack(c), r * W + cl, r * W + cr);
         }
       }
     }
@@ -117,7 +177,7 @@ function render() {
   if (sel) {
     const px = tx + sel.x * scale, py = ty + sel.y * scale;
     const taken_ = taken.has(sel.x + "_" + sel.y);
-    if (!taken_ && scale >= 2) { dctx.fillStyle = COLORS[color]; dctx.fillRect(px, py, scale, scale); }   // preview of your color, exact pixel size
+    if (!taken_ && scale >= 2) { dctx.fillStyle = hexOf(color); dctx.fillRect(px, py, scale, scale); }   // preview of your color, exact pixel size
     if (scale >= 4) {                                          // thin outline hugging the pixel
       dctx.lineWidth = 1; dctx.strokeStyle = "#000"; dctx.strokeRect(px - 0.5, py - 0.5, scale + 1, scale + 1);
       dctx.strokeStyle = "#fff"; dctx.strokeRect(px - 1.5, py - 1.5, scale + 3, scale + 3);
@@ -234,7 +294,7 @@ function updateUI() {
   placeBtn.textContent = occupied ? "Pixel taken" : "Place pixel";
 }
 
-resize(); fit(); window.addEventListener("resize", () => { resize(); clampPan(); });
+setColor(color); resize(); fit(); window.addEventListener("resize", () => { resize(); clampPan(); });
 
 function draw(x, y, c) { taken.add(x + "_" + y); colors[y * SIZE + x] = c; redraw(); }
 
@@ -262,7 +322,7 @@ if (API_URL.includes("YOUR-SUBDOMAIN")) {
     if (!sel) return;
     const { x, y } = sel; placeBtn.disabled = true;
     try {
-      const res = await fetch(`${API_URL}/place`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ x, y, c: color }) });
+      const res = await fetch(`${API_URL}/place`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ x, y, c: color, v: 2 }) });
       const r = await res.json();
       if (r.used !== undefined) used = r.used;
       if (res.ok) { draw(x, y, color); sel = null; redraw(); toast("Pixel placed!"); }
